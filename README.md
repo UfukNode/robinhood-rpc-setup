@@ -86,6 +86,21 @@ err="failed getting delayed messages ...: 403 Forbidden:
 Script bu üç şeyi de kurulumu başlatmadan önce test ediyor: L1 doğru ağ mı, arşiv sorgusu
 çalışıyor mu, beacon cevap veriyor mu.
 
+Ücretsiz adresleri tek tek denedim, arşiv sorgusuna cevap verenler şunlar:
+
+| Adres                                    | Arşiv sorgusu |
+| ---------------------------------------- | ------------- |
+| `https://eth.drpc.org`                   | çalışıyor     |
+| `https://rpc.flashbots.net`              | çalışıyor     |
+| `https://eth-mainnet.public.blastapi.io` | çalışıyor     |
+| `https://1rpc.io/eth`                    | çalışıyor     |
+| `https://ethereum-rpc.publicnode.com`    | reddediyor    |
+| `https://rpc.ankr.com/eth`               | anahtar ister |
+| `https://cloudflare-eth.com`             | hata veriyor  |
+
+Bunlar kuru denemede işinizi görür ama uzun senkron sırasında hız sınırına takılabilirsiniz.
+Gerçek kurulum için kendi node'unuz ya da anahtarlı bir sağlayıcı daha sağlam olur.
+
 ---
 
 ## Sunucu Önerileri
@@ -137,15 +152,44 @@ sudo ./script.sh --dry-run \
 - "[L1_RPC_ADRESINIZ]" kısmına Ethereum execution RPC adresinizi girin.
 - "[BEACON_ADRESINIZ]" kısmına beacon adresinizi girin.
 
-Aşağıdaki gibi bitiyorsa hazırsınız:
+Ekranda göreceğiniz şey aynen bu:
 
-```
+```text
+[bilgi] L1 execution adresi doğrulanıyor...
+[tamam] L1 execution doğru: chainId 1 (Ethereum mainnet)
+[bilgi] L1 arşiv sorgusu destekliyor mu, kontrol ediliyor...
+[tamam] L1 arşiv sorgusu çalışıyor.
+[bilgi] L1 beacon adresi doğrulanıyor...
+[tamam] Beacon cevap verdi: Lighthouse/v8.2.2-e423a66/x86_64-linux
+
+========== CONFIG DOSYALARI ==========
+
+[bilgi] İndiriliyor: robinhood-chain-info.json
+[tamam] robinhood-chain-info.json (4.0K)
+[bilgi] İndiriliyor: robinhood-genesis.json
+[tamam] robinhood-genesis.json (616K)
+[tamam] Config doğrulandı: chainId 4663
+
+========== SNAPSHOT ==========
+
+[bilgi] Arbitrum snapshot indeksinden en güncel pruned aranıyor...
+[bilgi] Tarih  : 2026-08-26
+[bilgi] Boyut  : 465 GB (1 parça)
+[bilgi] Adres  : https://robinhood-snapshots.offchainlabs.com/robinhood%20chain/2026-08-26-29670eab/pruned.tar.part0000
+[bilgi] Adres erişilebilir mi, kontrol ediliyor...
+[tamam] Snapshot hazır. İndirmeyi node'un kendisi yapacak.
+[uyarı] 465 GB indirilecek. Hattınıza göre saatler sürebilir, bu normal.
+
+========== KURU DENEME BİTTİ ==========
+
 [tamam] Her şey yolunda. Gerçek kurulum için --dry-run olmadan çalıştırın.
 
   Ağ            : mainnet (chainId 4663)
   L1 execution  : doğrulandı (chainId 1)
   L1 beacon     : Lighthouse/v8.2.2-e423a66/x86_64-linux
-  Snapshot      : https://robinhood-snapshots.offchainlabs.com/robinhood%20chain/...
+  Config        : /tmp/rh/config
+  Snapshot      : https://robinhood-snapshots.offchainlabs.com/robinhood%20chain/2026-08-26-29670eab/pruned.tar.part0000
+  Docker imajı  : offchainlabs/nitro-node:v3.11.2-3599aca (çekilmedi)
 ```
 
 Hata alırsanız kurulumu başlatmayın, önce onu çözün. 466 GB indirdikten sonra yanlış adres
@@ -172,12 +216,73 @@ Script sırasıyla şunları yapar:
 
 Snapshot indirmeyi node'un kendisi yapar. 466 GB, hattınıza göre saatler sürer.
 
+Kurulum bittiğinde ekran şöyle görünür:
+
+```text
+========== SERVİS ==========
+
+[bilgi] Docker imajı çekiliyor: offchainlabs/nitro-node:v3.11.2-3599aca (yaklaşık 1.4 GB)
+[tamam] İmaj hazır.
+[tamam] Servis yazıldı: robinhood-rpc.service
+
+========== GÜVENLİK DUVARI ==========
+
+[bilgi] RPC dışarı açılmadı. Sadece bu sunucudan erişilebilir.
+[bilgi] Sonradan açmak için: ufw allow from <ip> to any port 8547 proto tcp
+
+========== BAŞLATILIYOR ==========
+
+[tamam] Servis çalışıyor.
+
+Kurulum tamamlandı.
+
+  Ağ         : mainnet (chainId 4663)
+  RPC        : http://127.0.0.1:8547
+  WebSocket  : ws://127.0.0.1:8548
+  Veri       : /root/rh/robinhood-nitro-data
+  Config     : /root/rh/config
+
+Sık kullanılan komutlar
+
+  Log izle        : journalctl -u robinhood-rpc -f
+  Durum           : systemctl status robinhood-rpc
+  Durdur          : systemctl stop robinhood-rpc
+  Başlat          : systemctl start robinhood-rpc
+  Kaldır          : sudo ./script.sh --uninstall
+
+Senkron kontrolü
+
+  curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}'
+
+  Cevap false olduğunda senkron bitmiştir. O ana kadar blok numarası
+  geriden gelir, bu normaldir.
+
+  curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
+
+[uyarı] Snapshot indirme ve açma işlemi saatler sürer. İlk saatlerde blok
+[uyarı] numarasının ilerlememesi normaldir, log akıyorsa her şey yolundadır.
+```
+
 ---
 
 ## 5- Logları İzleme
 
 ```bash
 journalctl -u robinhood-rpc -f
+```
+
+Node ayağa kalkarken göreceğiniz satırlar şunlar. `HTTP server started` ve `WebSocket enabled`
+satırlarını gördüyseniz RPC'niz dinlemeye başlamış demektir:
+
+```text
+INFO [.....] Running Arbitrum nitro node       revision=v3.11.2-3599aca
+INFO [.....] connected to l1 chain             l1url=https://... l1chainid=1
+INFO [.....] Defaulting to pebble as the backing database
+INFO [.....] HTTP server started               endpoint=[::]:8547 auth=false cors=* vhosts=*
+INFO [.....] WebSocket enabled                 url=ws://[::]:8548
+INFO [.....] InboxTracker                      sequencerBatchCount=1 messageCount=1 l1Block=24,994,238
 ```
 
 İlk saatlerde blok numarasının ilerlememesi normaldir, snapshot iniyordur. Log akıyorsa her şey
@@ -201,7 +306,22 @@ curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 ```
 
-Çıkan sayıyı explorer'daki son blokla karşılaştırın: https://robinhoodchain.blockscout.com
+Node'un doğru ağda olduğunu şöyle teyit edebilirsiniz:
+
+```bash
+curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+```
+
+```text
+{"jsonrpc":"2.0","id":1,"result":"0x1237"}
+```
+
+`0x1237` onaltılık tabanda **4663** demektir, yani Robinhood Chain. Farklı bir sayı görüyorsanız
+yanlış config ile açılmışsınızdır.
+
+Çıkan blok numarasını explorer'daki son blokla karşılaştırın:
+https://robinhoodchain.blockscout.com
 
 ---
 
@@ -320,6 +440,26 @@ bu bayrak yok ama node onsuz hiç açılmıyor, gerçek kurulumda ortaya çıkt�
 journalctl -u robinhood-rpc -n 100 --no-pager
 ```
 Genelde L1 bağlantısı ya da disk dolmasıdır.
+
+---
+
+## Test Edildi
+
+Script sıfırdan kurulan bir sunucuda uçtan uca çalıştırıldı. Doğrulananlar:
+
+- Ubuntu 22.04 ve 24.04 üzerinde, hiçbir şey kurulu değilken (`jq` yok, `docker` yok) çalışıyor.
+- Docker'ı kendisi kuruyor, nitro imajını çekiyor, systemd servisini yazıp başlatıyor.
+- Node ayağa kalkıyor, L1'e bağlanıyor, HTTP 8547 ve WebSocket 8548 dinlemeye başlıyor.
+- `eth_chainId` **4663** dönüyor, yani doğru ağ.
+- `--uninstall` servisi ve config'i kaldırıyor, veri klasörüne dokunmuyor.
+- Hata yolları da denendi: yanlış ağ, ulaşılamayan L1, arşiv desteklemeyen L1, cevapsız beacon.
+  Hepsi ne olduğunu söyleyen bir mesajla duruyor.
+
+Doğrulanmayan tek şey senkronun sonuna kadar gitmesi. Onun için 64 GB RAM ve 1.2 TB disk gerekiyor.
+
+Bu arada resmi dokümanda olmayan iki şey gerçek çalıştırmada ortaya çıktı ve ikisi de kurulumu
+baştan bozuyordu. `--execution.forwarding-target` olmadan node hiç açılmıyor, ve arşiv sorgusu
+desteklemeyen bir L1 adresiyle veritabanı kurulamadan ölüyor. Script ikisini de hallediyor.
 
 ---
 

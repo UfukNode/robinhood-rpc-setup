@@ -231,16 +231,21 @@ fi
 ##############################
 section "PAKETLER"
 if [[ "$DRY_RUN" == "1" ]]; then
-  info "Kuru deneme: paket ve docker kurulumu atlanıyor."
-  for need in curl jq; do
-    command -v "$need" >/dev/null 2>&1 || abort "Kuru deneme için ${need} gerekli."
-  done
+  # Kuru denemede docker kurmuyoruz ama curl ve jq lazım, ve taze bir sunucuda
+  # jq kurulu gelmez. Küçük araçları burada da kuruyoruz, yoksa "kuru deneme"
+  # tam da en çok işe yarayacağı yerde, sıfırdan kurulan makinede çalışmıyordu.
+  if ! command -v jq >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
+    info "Kuru deneme için curl ve jq kuruluyor (docker kurulmayacak)..."
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl jq >/dev/null 2>&1
+  fi
+  ok "Kuru deneme: docker ve diğer paketler atlanıyor."
 else
 info "Paket listesi güncelleniyor..."
-DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null
+DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1
 info "Gerekli araçlar kuruluyor..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  ca-certificates curl jq wget gnupg lsb-release ufw >/dev/null
+  ca-certificates curl jq wget gnupg lsb-release ufw >/dev/null 2>&1
 ok "Araçlar hazır."
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -457,8 +462,12 @@ DOCKER_ARGS=(
 [[ -n "$GENESIS" ]] && DOCKER_ARGS+=("--init.genesis-json-file=/home/nitro/config/${GENESIS}")
 [[ -n "$SNAPSHOT_URL" ]] && DOCKER_ARGS+=("--init.url=${SNAPSHOT_URL}")
 
-info "Docker imajı çekiliyor: ${NITRO_IMAGE}"
-docker pull "${NITRO_IMAGE}" >/dev/null
+info "Docker imajı çekiliyor: ${NITRO_IMAGE} (yaklaşık 1.4 GB)"
+if ! docker pull "${NITRO_IMAGE}" >/dev/null 2>/tmp/rh-pull.err; then
+  err "Docker imajı çekilemedi. Docker'ın verdiği hata:"
+  sed 's/^/        /' /tmp/rh-pull.err | head -5
+  abort "İnternet bağlantınızı ve diskte yer olduğunu kontrol edip tekrar deneyin."
+fi
 ok "İmaj hazır."
 
 cat > "/etc/systemd/system/${SERVICE}.service" <<EOF
@@ -522,7 +531,10 @@ sleep 8
 if systemctl is-active --quiet "${SERVICE}"; then
   ok "Servis çalışıyor."
 else
-  err "Servis başlamadı. Log: journalctl -u ${SERVICE} -n 50 --no-pager"
+  err "Servis başlamadı. Son satırlar:"
+  journalctl -u "${SERVICE}" -n 15 --no-pager 2>/dev/null | sed 's/^/        /'
+  echo ""
+  err "Tam log için: journalctl -u ${SERVICE} -n 100 --no-pager"
   exit 1
 fi
 
