@@ -86,7 +86,10 @@ err="failed getting delayed messages ...: 403 Forbidden:
 Script bu üç şeyi de kurulumu başlatmadan önce test ediyor: L1 doğru ağ mı, arşiv sorgusu
 çalışıyor mu, beacon cevap veriyor mu.
 
-Ücretsiz adresleri tek tek denedim, arşiv sorgusuna cevap verenler şunlar:
+İkisini birden tek yerden almak isterseniz **Alchemy** hem RPC hem beacon adresi veriyor:
+https://www.alchemy.com/rpc/ethereum
+
+Ücretsiz adresleri de tek tek denedim, arşiv sorgusuna cevap verenler şunlar:
 
 | Adres                                    | Arşiv sorgusu |
 | ---------------------------------------- | ------------- |
@@ -137,7 +140,25 @@ chmod +x script.sh
 
 ---
 
-## 3- Önce Kuru Deneme
+## 3- Dil Seçimi
+
+Script başlayınca dil sorar:
+
+```text
+  Dil seçin / Choose language
+
+    1) Türkçe
+    2) English
+
+  [1/2]:
+```
+
+Sormadan geçmek isterseniz `--lang tr` ya da `--lang en` verin. Bütün mesajlar, sorular ve yardım
+ekranı seçtiğiniz dilde çıkar.
+
+---
+
+## 4- Önce Kuru Deneme
 
 Kurulumu başlatmadan önce her şeyin yerinde olduğunu görün. Bu adım hiçbir şey kurmaz, sadece
 kontrol eder: L1 adresleriniz doğru mu, disk yetiyor mu, config dosyaları iniyor mu, snapshot
@@ -197,7 +218,7 @@ yüzünden baştan başlamak istemezsiniz.
 
 ---
 
-## 4- Kurulum
+## 5- Kurulum
 
 ```bash
 sudo ./script.sh \
@@ -267,7 +288,7 @@ Senkron kontrolü
 
 ---
 
-## 5- Logları İzleme
+## 6- Logları İzleme
 
 ```bash
 journalctl -u robinhood-rpc -f
@@ -290,7 +311,7 @@ yolundadır.
 
 ---
 
-## 6- Senkron Kontrolü
+## 7- Senkron Kontrolü
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
@@ -325,7 +346,7 @@ https://robinhoodchain.blockscout.com
 
 ---
 
-## 7- RPC'yi Kullanma
+## 8- RPC'yi Kullanma
 
 Node senkronlandıktan sonra kendi RPC adresiniz hazır demektir:
 
@@ -368,6 +389,7 @@ sudo ./script.sh --expose-rpc yes --allowed-ip [SIZIN_IP] \
 
 | Seçenek                    | Ne işe yarar                                              |
 | -------------------------- | --------------------------------------------------------- |
+| `--lang tr\|en`            | Arayüz dili. Verilmezse başta sorulur                      |
 | `--network mainnet\|testnet` | Hangi ağ kurulacak (varsayılan mainnet)                  |
 | `--l1-rpc <url>`           | Ethereum L1 execution adresi, zorunlu                     |
 | `--l1-beacon <url>`        | Ethereum L1 beacon adresi, zorunlu                        |
@@ -452,14 +474,29 @@ Script sıfırdan kurulan bir sunucuda uçtan uca çalıştırıldı. Doğrulana
 - Node ayağa kalkıyor, L1'e bağlanıyor, HTTP 8547 ve WebSocket 8548 dinlemeye başlıyor.
 - `eth_chainId` **4663** dönüyor, yani doğru ağ.
 - `--uninstall` servisi ve config'i kaldırıyor, veri klasörüne dokunmuyor.
+- Türkçe ve İngilizce, ikisi de uçtan uca çalışıyor. Dil sorusu, `--lang` bayrağı ve iki dildeki
+  yardım ekranı ayrı ayrı denendi.
+- Snapshot açıkken kurulum yapılıp systemd servisinin gerçekten başladığı ve node'un snapshot
+  indirmeye geçtiği doğrulandı.
 - Hata yolları da denendi: yanlış ağ, ulaşılamayan L1, arşiv desteklemeyen L1, cevapsız beacon.
   Hepsi ne olduğunu söyleyen bir mesajla duruyor.
 
 Doğrulanmayan tek şey senkronun sonuna kadar gitmesi. Onun için 64 GB RAM ve 1.2 TB disk gerekiyor.
 
-Bu arada resmi dokümanda olmayan iki şey gerçek çalıştırmada ortaya çıktı ve ikisi de kurulumu
-baştan bozuyordu. `--execution.forwarding-target` olmadan node hiç açılmıyor, ve arşiv sorgusu
-desteklemeyen bir L1 adresiyle veritabanı kurulamadan ölüyor. Script ikisini de hallediyor.
+Resmi dokümanda olmayan üç şey gerçek çalıştırmada ortaya çıktı ve üçü de kurulumu baştan
+bozuyordu:
+
+`--execution.forwarding-target` olmadan node hiç açılmıyor, "ForwardingTarget not set and not
+sequencer" deyip duruyor.
+
+Arşiv sorgusu desteklemeyen bir L1 adresiyle veritabanı kurulamadan ölüyor.
+
+Snapshot adresi boşluk yüzünden `%20` içeriyor ve systemd unit dosyasında `%` özel karakter.
+Escape edilmeden yazılınca systemd servisi hiç başlatmıyor, `Unit robinhood-rpc.service has a bad
+unit file setting` diyor. Bu hata sadece snapshot ile kurulunca çıkıyor, o yüzden ilk testlerde
+görünmedi. Script artık `%%` yazıyor.
+
+Üçünü de script hallediyor.
 
 ---
 
