@@ -7,12 +7,6 @@ gelir. Hiçbir adres elle yazılmadı, hepsi kaynağından çekiliyor.
 
 Yanındaki `script.sh` bütün adımları tek komutta yapar ve sizi her hangi bir şeyle uğraştırmadan direkt seçinlerinizle ilerlemenizi sağlar.
 
-> **Bu kurulum küçük bir VPS'e sığmaz.** Resmi doküman en az 64 GB RAM istiyor, önerdiği 128 GB.
-> Mainnet snapshot'ı bugün itibarıyla 466 GB ve doküman "zincir boyutunun 2 katı + %20" diyor,
-> yani gerçekçi disk ihtiyacı 1.1 TB NVMe. Üstüne, node'un çalışması için kendi Ethereum L1
-> bağlantınız gerekiyor. Diğer rehberlerimdeki 6 dolarlık sunucularla olacak bir iş değil, en
-> baştan bilin.
-
 ---
 
 ## Genel Bilgiler
@@ -22,16 +16,9 @@ Yanındaki `script.sh` bütün adımları tek komutta yapar ve sizi her hangi bi
 | Ağ                 | Robinhood Chain (mainnet)                                     |
 | Chain ID           | 4663                                                          |
 | Tür                | Arbitrum Nitro L2, Ethereum üzerine yazar                     |
-| Gaz tokeni         | ETH                                                           |
-| Üst zincir         | Ethereum mainnet (chainId 1)                                  |
 | Resmi doküman      | https://docs.robinhood.com/chain/run-a-full-node/             |
 | Public RPC         | https://rpc.mainnet.chain.robinhood.com                        |
 | Explorer           | https://robinhoodchain.blockscout.com                          |
-| Docker imajı       | `offchainlabs/nitro-node:v3.11.2-3599aca`                     |
-| Portlar            | 8547 (HTTP RPC), 8548 (WebSocket)                             |
-
-Testnet de kurulabilir. Adı **Robinhood Chain Sepolia**, chainId **46630**, üst zinciri
-**Sepolia** (11155111). Yani testnet için Sepolia L1 bağlantısı gerekir, mainnet'inki işe yaramaz.
 
 ---
 
@@ -56,6 +43,7 @@ Bugün ölçtüğüm snapshot boyutları:
 
 Normal bir RPC node için `pruned` yani 466GB yeterli. Eski blokların state'ine erişmeniz gerekmiyorsa
 arşive ihtiyacınız yok.
+
 ---
 
 ## Ethereum L1 Bağlantısı
@@ -66,7 +54,7 @@ Robinhood Chain verisini Ethereum'a **blob** olarak yazar. Node'un bu veriyi oku
 iki ayrı adres gerekir:
 
 1. **L1 execution RPC**, sıradan bir Ethereum RPC adresi.
-2. **L1 beacon adresi**, blob verisi sadece burada durur, execution tarafında yoktur.
+2. **L1 beacon RPC**, blob verisi sadece burada durur, execution tarafında yoktur.
 
 Kendi Ethereum node'unuz varsa ikisi de sizde vardır. Yoksa bir sağlayıcıdan alacaksınız.
 Beacon adresi vermeyen sağlayıcılar var, aldığınızın verdiğinden emin olun.
@@ -99,7 +87,7 @@ https://www.alchemy.com/rpc/ethereum
 | `https://rpc.ankr.com/eth`               | anahtar ister |
 | `https://cloudflare-eth.com`             | hata veriyor  |
 
-Bunlar kuru denemede işinizi görür ama uzun senkron sırasında hız sınırına takılabilirsiniz.
+Bunlar denemede yapmanız için işinizi görür ama uzun senkron sırasında hız sınırına takılabilirsiniz.
 Gerçek kurulum için kendi node'unuz ya da anahtarlı bir sağlayıcı daha sağlam olur.
 
 ---
@@ -108,10 +96,9 @@ Gerçek kurulum için kendi node'unuz ya da anahtarlı bir sağlayıcı daha sa�
 
 Bu iş için kiralık VPS değil, dedicated ya da yüksek RAM'li bir makine gerekiyor.
 
-- **Hetzner** dedicated sunucular → 64 GB RAM ve NVMe seçenekleri makul fiyatlı.
+- **Serverica* sunucular → 64 GB RAM ve NVMe seçenekleri makul fiyatlı.
 - **OVH** ya da **Contabo** dedicated → benzer aralıkta.
-- Kendi makineniz varsa en iyisi o, çünkü diskin yerel NVMe olması önemli. Ağ üzerinden bağlı
-  disk (network storage) bu iş için yavaş kalır.
+- Kendi makineniz varsa en iyisi o olabilir.
 
 ---
 
@@ -138,7 +125,15 @@ chmod +x script.sh
 
 ---
 
-## 3- Dil Seçimi
+## 3- Kurulum::
+
+```bash
+sudo ./script.sh
+```
+
+---
+
+## 4- Dil Seçimi ve Diğer Seçimler:
 
 Script başlayınca dil sorar:
 
@@ -151,78 +146,7 @@ Script başlayınca dil sorar:
   [1/2]:
 ```
 
-Sormadan geçmek isterseniz `--lang tr` ya da `--lang en` verin. Bütün mesajlar, sorular ve yardım
-ekranı seçtiğiniz dilde çıkar.
-
----
-
-## 4- Önce Kuru Deneme
-
-Kurulumu başlatmadan önce her şeyin yerinde olduğunu görün. Bu adım hiçbir şey kurmaz, sadece
-kontrol eder: L1 adresleriniz doğru mu, disk yetiyor mu, config dosyaları iniyor mu, snapshot
-erişilebilir mi.
-
-```bash
-sudo ./script.sh --dry-run \
-  --l1-rpc [L1_RPC_ADRESINIZ] \
-  --l1-beacon [BEACON_ADRESINIZ]
-```
-
-- "[L1_RPC_ADRESINIZ]" kısmına Ethereum execution RPC adresinizi girin.
-- "[BEACON_ADRESINIZ]" kısmına beacon adresinizi girin.
-
-Ekranda göreceğiniz şey aynen bu:
-
-```text
-[bilgi] L1 execution adresi doğrulanıyor...
-[tamam] L1 execution doğru: chainId 1 (Ethereum mainnet)
-[bilgi] L1 arşiv sorgusu destekliyor mu, kontrol ediliyor...
-[tamam] L1 arşiv sorgusu çalışıyor.
-[bilgi] L1 beacon adresi doğrulanıyor...
-[tamam] Beacon cevap verdi: Lighthouse/v8.2.2-e423a66/x86_64-linux
-
-========== CONFIG DOSYALARI ==========
-
-[bilgi] İndiriliyor: robinhood-chain-info.json
-[tamam] robinhood-chain-info.json (4.0K)
-[bilgi] İndiriliyor: robinhood-genesis.json
-[tamam] robinhood-genesis.json (616K)
-[tamam] Config doğrulandı: chainId 4663
-
-========== SNAPSHOT ==========
-
-[bilgi] Arbitrum snapshot indeksinden en güncel pruned aranıyor...
-[bilgi] Tarih  : 2026-08-26
-[bilgi] Boyut  : 465 GB (1 parça)
-[bilgi] Adres  : https://robinhood-snapshots.offchainlabs.com/robinhood%20chain/2026-08-26-29670eab/pruned.tar.part0000
-[bilgi] Adres erişilebilir mi, kontrol ediliyor...
-[tamam] Snapshot hazır. İndirmeyi node'un kendisi yapacak.
-[uyarı] 465 GB indirilecek. Hattınıza göre saatler sürebilir, bu normal.
-
-========== KURU DENEME BİTTİ ==========
-
-[tamam] Her şey yolunda. Gerçek kurulum için --dry-run olmadan çalıştırın.
-
-  Ağ            : mainnet (chainId 4663)
-  L1 execution  : doğrulandı (chainId 1)
-  L1 beacon     : Lighthouse/v8.2.2-e423a66/x86_64-linux
-  Config        : /tmp/rh/config
-  Snapshot      : https://robinhood-snapshots.offchainlabs.com/robinhood%20chain/2026-08-26-29670eab/pruned.tar.part0000
-  Docker imajı  : offchainlabs/nitro-node:v3.11.2-3599aca (çekilmedi)
-```
-
-Hata alırsanız kurulumu başlatmayın, önce onu çözün. 466 GB indirdikten sonra yanlış adres
-yüzünden baştan başlamak istemezsiniz.
-
----
-
-## 5- Kurulum
-
-```bash
-sudo ./script.sh \
-  --l1-rpc [L1_RPC_ADRESINIZ] \
-  --l1-beacon [BEACON_ADRESINIZ]
-```
+Burada seçeceğiniz dil ile sorular ve yardım ekranı seçtiğiniz dilde çıkar.
 
 Script sırasıyla şunları yapar:
 
@@ -286,7 +210,7 @@ Senkron kontrolü
 
 ---
 
-## 6- Logları İzleme
+## 5- Logları İzleme
 
 ```bash
 journalctl -u robinhood-rpc -f
@@ -309,7 +233,7 @@ yolundadır.
 
 ---
 
-## 7- Senkron Kontrolü
+## 6- Senkron Kontrolü
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
@@ -344,7 +268,7 @@ https://robinhoodchain.blockscout.com
 
 ---
 
-## 8- RPC'yi Kullanma
+## 7- RPC'yi Kullanma
 
 Node senkronlandıktan sonra kendi RPC adresiniz hazır demektir:
 
