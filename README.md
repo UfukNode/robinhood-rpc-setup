@@ -5,8 +5,7 @@ tamamı Robinhood'un resmi dokümanını takip eder: config dosyaları Robinhood
 docker imajı dokümanın sabitlediği sürümden, snapshot ise Arbitrum'un resmi snapshot indeksinden
 gelir. Hiçbir adres elle yazılmadı, hepsi kaynağından çekiliyor.
 
-Yanındaki `script.sh` bütün adımları tek komutta yapar. Rehberi okuyup elle de kurabilirsiniz,
-ikisi de aynı sonucu verir.
+Yanındaki `script.sh` bütün adımları tek komutta yapar ve sizi her hangi bir şeyle uğraştırmadan direkt seçinlerinizle ilerlemenizi sağlar.
 
 > **Bu kurulum küçük bir VPS'e sığmaz.** Resmi doküman en az 64 GB RAM istiyor, önerdiği 128 GB.
 > Mainnet snapshot'ı bugün itibarıyla 466 GB ve doküman "zincir boyutunun 2 katı + %20" diyor,
@@ -55,9 +54,8 @@ Bugün ölçtüğüm snapshot boyutları:
 | `full-path`    | 449 GB      | 277 GB      |
 | `archive-path` | 701 GB      | 3.669 GB    |
 
-Normal bir RPC node için `pruned` yeterli. Eski blokların state'ine erişmeniz gerekmiyorsa
+Normal bir RPC node için `pruned` yani 466GB yeterli. Eski blokların state'ine erişmeniz gerekmiyorsa
 arşive ihtiyacınız yok.
-
 ---
 
 ## Ethereum L1 Bağlantısı
