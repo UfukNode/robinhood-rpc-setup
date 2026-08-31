@@ -70,7 +70,7 @@ L1_BEACON=""
 DATA_ROOT="/root/rh"
 USE_SNAPSHOT="yes"
 SNAPSHOT_TYPE="pruned"     # pruned | full-path | archive-path
-FORWARD_TARGET=""          # bos ise agin resmi RPC'si / empty means the chain's own RPC
+FORWARD_TARGET=""          # bos ise resmi sequencer / empty means the official sequencer
 NON_INTERACTIVE="0"
 UNINSTALL_ONLY="0"
 DRY_RUN="0"
@@ -81,6 +81,9 @@ NITRO_IMAGE="offchainlabs/nitro-node:v3.11.2-3599aca"
 CDN="https://cdn.robinhood.com/assets/generated_assets/hoodchain_docsite/chain-node-configs"
 SNAPSHOT_INDEX="https://snapshot-explorer.arbitrum.io/api/snapshots"
 SERVICE="robinhood-rpc"
+CONTAINER_HOME="/home/user"
+CONTAINER_UID="1000"
+CONTAINER_GID="1000"
 
 usage() {
   if [[ "$UI_LANG" == "en" ]]; then
@@ -104,8 +107,8 @@ Options:
   --snapshot-type <type>        pruned | full-path | archive-path
   --forwarding-target <url>     Where transactions are forwarded. Defaults to
                                 the chain's own RPC. Read only: null
-  --dry-run                     Check only: L1 endpoints, disk, config and
-                                snapshot are verified, nothing is installed
+  --dry-run                     Check L1 endpoints, disk, config and snapshot.
+                                Docker/node service are not installed
   --non-interactive             Ask nothing, use defaults
   --uninstall                   Remove the service and config (data is kept)
   -h, --help                    This screen
@@ -136,8 +139,8 @@ Seçenekler:
   --snapshot-type <tür>         pruned | full-path | archive-path
   --forwarding-target <url>     İşlemlerin iletileceği adres. Varsayılan ağın
                                 kendi RPC'si. Sadece okuma için: null
-  --dry-run                     Sadece kontrol et: L1 adresleri, disk, config ve
-                                snapshot doğrulanır, hiçbir şey kurulmaz
+  --dry-run                     L1 adresleri, disk, config ve snapshot kontrolü.
+                                Docker/node servisi kurulmaz
   --non-interactive             Soru sorma, varsayılanlarla devam et
   --uninstall                   Servisi ve config'i kaldır (veri korunur)
   -h, --help                    Bu ekran
@@ -151,6 +154,12 @@ EOF
 }
 
 while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --lang|--network|--l1-rpc|--l1-beacon|--expose-rpc|--allowed-ip|--rpc-port|--ws-port|--data-dir|--snapshot-type|--forwarding-target)
+      [[ $# -ge 2 && -n "${2:-}" && "${2:-}" != --* ]] \
+        || abort "$(m "Eksik değer" "Missing value"): $1"
+      ;;
+  esac
   case "$1" in
     --lang)           UI_LANG="${2:-}"; shift 2;;
     --network)        NETWORK="${2:-mainnet}"; shift 2;;
@@ -206,6 +215,13 @@ esac
 command -v apt-get >/dev/null 2>&1 \
   || abort "$(m "Bu script Debian/Ubuntu (apt) içindir." "This script is for Debian/Ubuntu (apt).")"
 
+# Docker deposu asagida Ubuntu'ya gore ekleniyor. Debian ve Ubuntu-turevi olup
+# Ubuntu olmayan sistemlerde yanlis depo eklemek yerine acik bir hata veriyoruz.
+. /etc/os-release
+[[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" =~ ^(22\.04|24\.04)$ ]] || abort "$(m \
+  "Bu script yalnızca Ubuntu 22.04/24.04 üzerinde destekleniyor (bulunan: ${PRETTY_NAME:-bilinmiyor})." \
+  "This script supports Ubuntu 22.04/24.04 only (found: ${PRETTY_NAME:-unknown}).")"
+
 case "$NETWORK" in
   mainnet)
     CHAIN_ID=4663
@@ -214,8 +230,11 @@ case "$NETWORK" in
     CHAIN_INFO="robinhood-chain-info.json"
     GENESIS="robinhood-genesis.json"
     FEED_URL="wss://feed.mainnet.chain.robinhood.com"
-    SEQUENCER_URL="https://rpc.mainnet.chain.robinhood.com"
+    SEQUENCER_URL="https://sequencer.mainnet.chain.robinhood.com"
     SNAPSHOT_CHAIN="Robinhood Chain"
+    ROLLUP_ADDRESS="0x23A19d23e89166adedbDcB432518AB01e4272D94"
+    ROLLUP_DEPLOYED_AT=24994238
+    GENESIS_ASSERTION_TOPIC="0x901c3aee23cf4478825462caaab375c606ab83516060388344f0650340753630"
     ;;
   testnet)
     CHAIN_ID=46630
@@ -224,16 +243,56 @@ case "$NETWORK" in
     CHAIN_INFO="robinhood-chain-testnet-info.json"
     GENESIS=""
     FEED_URL="wss://feed.testnet.chain.robinhood.com"
-    SEQUENCER_URL="https://rpc.testnet.chain.robinhood.com"
+    SEQUENCER_URL="https://sequencer.testnet.chain.robinhood.com"
     SNAPSHOT_CHAIN="Robinhood Chain Sepolia"
+    ROLLUP_ADDRESS="0xdc5F8E399DBd8a9F5F87AeC4C23Beb12431b386D"
+    ROLLUP_DEPLOYED_AT=10204516
+    GENESIS_ASSERTION_TOPIC="0x901c3aee23cf4478825462caaab375c606ab83516060388344f0650340753630"
     ;;
   *) abort "$(m "--network sadece mainnet veya testnet olabilir." "--network must be mainnet or testnet.")";;
 esac
 
 [[ -z "$FORWARD_TARGET" ]] && FORWARD_TARGET="$SEQUENCER_URL"
 
+for _port in "$RPC_PORT" "$WS_PORT"; do
+  if [[ ! "$_port" =~ ^[0-9]+$ ]] || (( _port < 1 || _port > 65535 )); then
+    abort "$(m "Geçersiz port: ${_port}" "Invalid port: ${_port}")"
+  fi
+done
+[[ "$RPC_PORT" != "$WS_PORT" ]] || abort "$(m \
+  "HTTP ve WebSocket portları farklı olmalı." \
+  "HTTP and WebSocket ports must be different.")"
+
+case "$EXPOSE_RPC" in
+  yes|no) ;;
+  *) abort "$(m "--expose-rpc yes veya no olmalı." "--expose-rpc must be yes or no.")";;
+esac
+
+case "$SNAPSHOT_TYPE" in
+  pruned|full-path|archive-path) ;;
+  *) abort "$(m \
+    "--snapshot-type pruned, full-path veya archive-path olabilir." \
+    "--snapshot-type can be pruned, full-path or archive-path.")";;
+esac
+
+[[ "$L1_RPC" != *$'\n'* && "$L1_BEACON" != *$'\n'* ]] || abort "$(m \
+  "L1 adreslerinde satır sonu olamaz." "L1 URLs cannot contain newlines.")"
+
 CONFIG_DIR="${DATA_ROOT}/config"
 DATA_DIR="${DATA_ROOT}/robinhood-nitro-data"
+ENV_FILE="${CONFIG_DIR}/rpc.env"
+if [[ "$EXPOSE_RPC" == "yes" ]]; then
+  RPC_BIND_ADDR="0.0.0.0"
+else
+  RPC_BIND_ADDR="127.0.0.1"
+fi
+
+[[ "$DATA_ROOT" == /* && "$DATA_ROOT" != "/" ]] || abort "$(m \
+  "--data-dir mutlak ve güvenli bir yol olmalı; / kullanılamaz." \
+  "--data-dir must be a safe absolute path; / is not allowed.")"
+[[ "$DATA_ROOT" =~ ^/[A-Za-z0-9._/-]+$ ]] || abort "$(m \
+  "--data-dir boşluk veya özel karakter içermemeli." \
+  "--data-dir must not contain spaces or special characters.")"
 
 ##############################
 # KALDIRMA / UNINSTALL
@@ -257,6 +316,12 @@ fi
 section "$(m "SİSTEM KONTROLÜ" "SYSTEM CHECK")"
 
 RAM_GB=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024 ))
+CPU_COUNT=$(nproc)
+info "CPU: ${CPU_COUNT}"
+if (( CPU_COUNT < 8 )); then
+  warn "$(m "Resmi gereksinim en az 8 modern CPU çekirdeği." \
+          "The official requirement is at least 8 modern CPU cores.")"
+fi
 info "RAM: ${RAM_GB} GB"
 if (( RAM_GB < 60 )); then
   warn "$(m "Resmi doküman en az 64 GB RAM istiyor, önerdiği 128 GB. Sizde ${RAM_GB} GB var." \
@@ -277,14 +342,38 @@ mkdir -p "${DATA_ROOT}"
 FREE_GB=$(df -BG --output=avail "${DATA_ROOT}" | tail -1 | tr -dc '0-9')
 info "$(m "Boş disk" "Free disk") (${DATA_ROOT}): ${FREE_GB} GB"
 
-# Dokuman "guncel zincir boyutunun 2 kati + %20" diyor. Mainnet pruned snapshot
-# bugun 466 GB, yani gercekci taban 1.1 TB. Testnet icin 233 GB uzerinden.
+DATA_FS=$(findmnt -n -o FSTYPE -T "${DATA_ROOT}" 2>/dev/null || true)
+case "$DATA_FS" in
+  nfs*|cifs|fuse.sshfs|ceph|glusterfs)
+    abort "$(m "Veri yolu ağ diskinde (${DATA_FS}); yerel NVMe gerekiyor." \
+                "The data path is on network storage (${DATA_FS}); local NVMe is required.")";;
+esac
+if ! lsblk -dn -o ROTA | grep -q '^0$'; then
+  warn "$(m "Sistemde NVMe/SSD doğrulanamadı; Nitro için yerel NVMe gerekiyor." \
+          "No NVMe/SSD could be verified; Nitro requires locally attached NVMe.")"
+fi
+
+if command -v timedatectl >/dev/null 2>&1 && \
+   [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" != "yes" ]]; then
+  warn "$(m "Sistem saati NTP ile senkron görünmüyor." \
+          "The system clock does not appear to be synchronized by NTP.")"
+fi
+
+# Bu degerler yalnizca erken uyari tabanidir. Resmi hesap guncel zincir
+# boyutunun 2 kati + %20'dir ve snapshot'in sikistirilmis boyutuyla ayni degildir.
 if [[ "$NETWORK" == "mainnet" ]]; then NEED_GB=1150; else NEED_GB=600; fi
 if (( FREE_GB < NEED_GB )); then
-  warn "$(m "${NETWORK} için önerilen boş alan ${NEED_GB} GB, sizde ${FREE_GB} GB var." \
-          "${NETWORK} wants about ${NEED_GB} GB free, you have ${FREE_GB} GB.")"
-  warn "$(m "Snapshot açılırken arşiv ve açılmış veri bir süre birlikte diskte durur." \
-          "While the snapshot unpacks, the archive and the unpacked data sit on disk together.")"
+  warn "$(m "${NETWORK} için ön kontrol tabanı ${NEED_GB} GB, sizde ${FREE_GB} GB var." \
+          "The ${NETWORK} preflight floor is ${NEED_GB} GB; you have ${FREE_GB} GB.")"
+  warn "$(m "Bu kesin yeterlilik hesabı değildir; resmi 2 x zincir boyutu + %20 kuralını uygulayın." \
+          "This is not a capacity guarantee; apply the official 2 x chain size + 20% rule.")"
+  if [[ "$USE_SNAPSHOT" == "yes" ]]; then
+    warn "$(m "Snapshot açılırken arşiv ve açılmış veri bir süre birlikte diskte durur." \
+            "While the snapshot unpacks, the archive and the unpacked data sit on disk together.")"
+  else
+    warn "$(m "Genesis'ten senkron sırasında veritabanı uzun süre büyümeye devam eder." \
+            "During a genesis sync the database keeps growing for a long time.")"
+  fi
   if [[ "$DRY_RUN" == "1" ]]; then
     warn "$(m "Kuru deneme olduğu için devam ediliyor." "Dry run, carrying on anyway.")"
   else
@@ -333,6 +422,8 @@ https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_C
     systemctl enable --now docker
     ok "$(m "Docker kuruldu." "Docker installed.")"
   else
+    systemctl enable --now docker >/dev/null 2>&1 \
+      || abort "$(m "Docker servisi başlatılamadı." "The Docker service could not be started.")"
     ok "$(m "Docker zaten kurulu" "Docker is already installed"): $(docker --version | cut -d, -f1)"
   fi
 fi
@@ -377,6 +468,8 @@ if [[ -z "$L1_BEACON" ]]; then
 fi
 [[ -n "$L1_RPC" && -n "$L1_BEACON" ]] \
   || abort "$(m "İki adres de zorunlu." "Both URLs are required.")"
+[[ "$L1_RPC" != *$'\n'* && "$L1_BEACON" != *$'\n'* ]] || abort "$(m \
+  "L1 adreslerinde satır sonu olamaz." "L1 URLs cannot contain newlines.")"
 
 info "$(m "L1 execution adresi doğrulanıyor..." "Checking the L1 execution URL...")"
 # `|| true`: curl baglanamazsa pipefail yuzunden script burada olurdu ve
@@ -390,6 +483,9 @@ L1_CHAIN_HEX=$(curl -s --max-time 25 -X POST "$L1_RPC" \
         Adres doğru mu, sağlayıcınız ayakta mı ve anahtarınız geçerli mi kontrol edin." \
   "The L1 execution URL did not answer: ${L1_RPC}
         Check the URL, whether your provider is up, and whether your key is valid.")"
+[[ "$L1_CHAIN_HEX" =~ ^0[xX][0-9a-fA-F]+$ || "$L1_CHAIN_HEX" =~ ^[0-9]+$ ]] || abort "$(m \
+  "L1 execution adresi geçersiz chainId döndürdü: ${L1_CHAIN_HEX}" \
+  "The L1 execution URL returned an invalid chainId: ${L1_CHAIN_HEX}")"
 L1_CHAIN=$((L1_CHAIN_HEX))
 if [[ "$L1_CHAIN" != "$PARENT_ID" ]]; then
   abort "$(m \
@@ -399,35 +495,30 @@ fi
 ok "$(m "L1 execution doğru: chainId ${L1_CHAIN} (${PARENT_NAME})" \
        "L1 execution is correct: chainId ${L1_CHAIN} (${PARENT_NAME})")"
 
-# Node acilirken L1'de eski bir blok araligina eth_getLogs atiyor. Ucretsiz
-# public RPC'lerin cogu bunu "archive requests require a personal token" diye
-# reddediyor ve node veritabanini kuramadan oluyor. Burada onceden deniyoruz.
-info "$(m "L1 arşiv sorgusu destekliyor mu, kontrol ediliyor..." \
-         "Checking whether the L1 URL answers archive queries...")"
-L1_HEAD_HEX=$(curl -s --max-time 25 -X POST "$L1_RPC" -H 'content-type: application/json' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' 2>/dev/null \
-  | jq -r '.result // empty' 2>/dev/null || true)
-if [[ -n "$L1_HEAD_HEX" ]]; then
-  OLD_BLOCK=$(printf '0x%x' $(( L1_HEAD_HEX - 200000 )))
-  LOGS_ERR=$(curl -s --max-time 30 -X POST "$L1_RPC" -H 'content-type: application/json' \
-    --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getLogs\",\"params\":[{\"fromBlock\":\"${OLD_BLOCK}\",\"toBlock\":\"${OLD_BLOCK}\"}]}" \
-    2>/dev/null | jq -r '.error.message // empty' 2>/dev/null || true)
-  if [[ -n "$LOGS_ERR" ]]; then
-    warn "$(m "L1 adresiniz eski blok sorgusunu reddetti:" "Your L1 URL refused an old-block query:")"
-    warn "  ${LOGS_ERR}"
-    warn "$(m "Node açılırken bu sorguyu yapıyor. Arşiv desteği olmayan ücretsiz bir" \
-            "The node makes this query on startup. With a free URL that has no archive")"
-    warn "$(m "adres kullanıyorsanız kurulum senkron başlamadan hata verir." \
-            "support, setup fails before syncing even begins.")"
-    if [[ "$DRY_RUN" == "1" ]]; then
-      warn "$(m "Kuru deneme olduğu için devam ediliyor." "Dry run, carrying on anyway.")"
-    else
-      confirm "$(m "Yine de devam edilsin mi?" "Continue anyway?")" "N" \
-        || abort "$(m "Kurulum iptal edildi." "Setup cancelled.")"
-    fi
+# Tam bir archive-state node gerekmiyor; ancak saglayici Rollup kontratinin
+# kuruldugu eski L1 bloklarinda eth_getLogs sorgusuna cevap verebilmeli.
+info "$(m "L1 geçmiş log sorgusu kontrol ediliyor..." \
+         "Checking an L1 historical log query...")"
+DEPLOYED_HEX=$(printf '0x%x' "$ROLLUP_DEPLOYED_AT")
+LOGS_RESPONSE=$(curl -s --max-time 30 -X POST "$L1_RPC" -H 'content-type: application/json' \
+  --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getLogs\",\"params\":[{\"address\":\"${ROLLUP_ADDRESS}\",\"fromBlock\":\"${DEPLOYED_HEX}\",\"toBlock\":\"${DEPLOYED_HEX}\",\"topics\":[[\"${GENESIS_ASSERTION_TOPIC}\"]]}]}" \
+  2>/dev/null || true)
+if ! printf '%s' "$LOGS_RESPONSE" | jq -e '.result | type == "array" and length > 0' >/dev/null 2>&1; then
+  LOGS_ERR=$(printf '%s' "$LOGS_RESPONSE" | jq -r '.error.message // empty' 2>/dev/null || true)
+  [[ -n "$LOGS_ERR" ]] || LOGS_ERR=$(m \
+    "Beklenen genesis assertion logu bulunamadı veya cevap geçersiz." \
+    "The expected genesis assertion log was missing or the response was invalid.")
+  warn "$(m "L1 adresiniz geçmiş log sorgusunu reddetti:" "Your L1 URL refused a historical log query:")"
+  warn "  ${LOGS_ERR}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    abort "$(m "Kuru deneme başarısız: historical log desteği doğrulanamadı." \
+                "Dry run failed: historical log support could not be verified.")"
   else
-    ok "$(m "L1 arşiv sorgusu çalışıyor." "Archive queries work.")"
+    confirm "$(m "Yine de devam edilsin mi?" "Continue anyway?")" "N" \
+      || abort "$(m "Kurulum iptal edildi." "Setup cancelled.")"
   fi
+else
+  ok "$(m "L1 geçmiş log sorgusu çalışıyor." "The L1 historical log query works.")"
 fi
 
 info "$(m "L1 beacon adresi doğrulanıyor..." "Checking the L1 beacon URL...")"
@@ -439,7 +530,8 @@ if [[ -z "$BEACON_VER" ]]; then
   warn "$(m "Adres yanlışsa node blob verisini okuyamaz ve senkronlanamaz." \
           "If the URL is wrong the node cannot read blob data and will not sync.")"
   if [[ "$DRY_RUN" == "1" ]]; then
-    warn "$(m "Kuru deneme olduğu için devam ediliyor." "Dry run, carrying on anyway.")"
+    abort "$(m "Kuru deneme başarısız: beacon endpoint doğrulanamadı." \
+                "Dry run failed: the beacon endpoint could not be verified.")"
   else
     confirm "$(m "Yine de devam edilsin mi?" "Continue anyway?")" "N" \
       || abort "$(m "Kurulum iptal edildi." "Setup cancelled.")"
@@ -456,12 +548,16 @@ mkdir -p "${CONFIG_DIR}" "${DATA_DIR}"
 
 fetch() {
   local name="$1"
+  local target="${CONFIG_DIR}/${name}" tmp
+  tmp=$(mktemp "${CONFIG_DIR}/.${name}.XXXXXX")
   info "$(m "İndiriliyor" "Downloading"): ${name}"
-  curl -fsSL --max-time 180 "${CDN}/${name}" -o "${CONFIG_DIR}/${name}" \
-    || abort "$(m "İndirilemedi" "Could not download"): ${CDN}/${name}"
-  jq -e . "${CONFIG_DIR}/${name}" >/dev/null 2>&1 \
-    || abort "$(m "Geçerli JSON değil" "Not valid JSON"): ${name}"
-  ok "${name} ($(du -h "${CONFIG_DIR}/${name}" | cut -f1))"
+  curl -fsSL --max-time 180 "${CDN}/${name}" -o "${tmp}" \
+    || { rm -f "${tmp}"; abort "$(m "İndirilemedi" "Could not download"): ${CDN}/${name}"; }
+  jq -e . "${tmp}" >/dev/null 2>&1 \
+    || { rm -f "${tmp}"; abort "$(m "Geçerli JSON değil" "Not valid JSON"): ${name}"; }
+  chmod 0644 "${tmp}"
+  mv -f "${tmp}" "${target}"
+  ok "${name} ($(du -h "${target}" | cut -f1))"
 }
 
 fetch "${CHAIN_INFO}"
@@ -473,7 +569,22 @@ INFO_CHAIN=$(jq -r 'if type=="array" then .[0] else . end | .["chain-config"].ch
 [[ "$INFO_CHAIN" == "$CHAIN_ID" ]] || abort "$(m \
   "Config chainId ${INFO_CHAIN} diyor, ${NETWORK} için ${CHAIN_ID} bekleniyordu." \
   "The config says chainId ${INFO_CHAIN}, ${NETWORK} expects ${CHAIN_ID}.")"
-ok "$(m "Config doğrulandı: chainId ${CHAIN_ID}" "Config verified: chainId ${CHAIN_ID}")"
+INFO_PARENT=$(jq -r 'if type=="array" then .[0] else . end | .["parent-chain-id"]' "${CONFIG_DIR}/${CHAIN_INFO}")
+[[ "$INFO_PARENT" == "$PARENT_ID" ]] || abort "$(m \
+  "Config parent chainId ${INFO_PARENT} diyor, ${PARENT_ID} bekleniyordu." \
+  "The config says parent chainId ${INFO_PARENT}, expected ${PARENT_ID}.")"
+INFO_ROLLUP=$(jq -r 'if type=="array" then .[0] else . end | .rollup.rollup' "${CONFIG_DIR}/${CHAIN_INFO}")
+[[ "${INFO_ROLLUP,,}" == "${ROLLUP_ADDRESS,,}" ]] || abort "$(m \
+  "Config içindeki Rollup adresi beklenen resmi adresle uyuşmuyor." \
+  "The Rollup address in the config does not match the expected official address.")"
+if [[ -n "$GENESIS" ]]; then
+  jq -e '.serializedChainConfig and (.alloc | type == "object") and (.alloc | length > 0)' \
+    "${CONFIG_DIR}/${GENESIS}" >/dev/null 2>&1 || abort "$(m \
+      "Genesis dosyasında zorunlu alanlar eksik." \
+      "Required fields are missing from the genesis file.")"
+fi
+ok "$(m "Config doğrulandı: chainId ${CHAIN_ID}, parent ${PARENT_ID}" \
+         "Config verified: chainId ${CHAIN_ID}, parent ${PARENT_ID}")"
 
 ##############################
 # SNAPSHOT
@@ -486,18 +597,21 @@ if [[ "$USE_SNAPSHOT" == "yes" ]]; then
   SNAP_JSON=$(curl -fsSL --max-time 90 -A "robinhood-rpc-setup" "${SNAPSHOT_INDEX}") \
     || abort "$(m "Snapshot indeksi okunamadı." "Could not read the snapshot index.")"
 
-  read -r SNAPSHOT_URL SNAP_SIZE SNAP_DATE SNAP_PARTS < <(
+  SNAPSHOT_URL=""; SNAP_SIZE=""; SNAP_DATE=""; SNAP_PARTS=""; SNAP_SHA256=""
+  read -r SNAPSHOT_URL SNAP_SIZE SNAP_DATE SNAP_PARTS SNAP_SHA256 < <(
     printf '%s' "$SNAP_JSON" | jq -r --arg chain "$SNAPSHOT_CHAIN" --arg type "$SNAPSHOT_TYPE" '
       .data[] | select(.name == $chain) as $c
       | $c.snapshots[]
+      | select(.isFinished == true)
       | select(.type | ascii_downcase == ($type | ascii_downcase))
       | {date: .snapshotDate, parts: .parts, base: $c.downloadBaseUrl}
-    ' | jq -s -r 'sort_by(.date) | last
+    ' | jq -s -r 'sort_by(.date) | (last // empty)
       | (.base + "/" + (.parts[0].key | @uri | gsub("%2F";"/"))) + " "
       + ((.parts | map(.size) | add) | tostring) + " "
       + .date + " "
-      + (.parts | length | tostring)'
-  )
+      + (.parts | length | tostring) + " "
+      + .parts[0].sha256'
+  ) || true
 
   [[ -n "$SNAPSHOT_URL" && "$SNAPSHOT_URL" != "null" ]] || abort "$(m \
     "${SNAPSHOT_CHAIN} için ${SNAPSHOT_TYPE} snapshot bulunamadı." \
@@ -509,22 +623,21 @@ if [[ "$USE_SNAPSHOT" == "yes" ]]; then
   info "$(m "Adres " "URL   "): ${SNAPSHOT_URL}"
 
   if (( SNAP_PARTS > 1 )); then
-    warn "$(m "Bu snapshot ${SNAP_PARTS} parçadan oluşuyor. Nitro tek parçayı kendisi indirir," \
-            "This snapshot has ${SNAP_PARTS} parts. Nitro downloads a single part itself,")"
-    warn "$(m "çok parçalı olanlar için resmi dokümandaki elle birleştirme adımı gerekir." \
-            "multi-part ones need the manual join step from the official docs.")"
-    warn "$(m "Daha küçük bir tür seçmek isterseniz: --snapshot-type pruned" \
-            "For a smaller one: --snapshot-type pruned")"
-    confirm "$(m "Yine de devam edilsin mi?" "Continue anyway?")" "N" \
-      || abort "$(m "Kurulum iptal edildi." "Setup cancelled.")"
+    abort "$(m \
+      "Bu snapshot ${SNAP_PARTS} parçalı. Tek parçayı Nitro'ya vermek bozuk arşiv oluşturacağı için kurulum durduruldu. --snapshot-type pruned kullanın." \
+      "This snapshot has ${SNAP_PARTS} parts. Passing one part to Nitro creates a broken archive, so setup stopped. Use --snapshot-type pruned.")"
   fi
 
   info "$(m "Adres erişilebilir mi, kontrol ediliyor..." "Checking that the URL is reachable...")"
   HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -I --max-time 60 "${SNAPSHOT_URL}")
   [[ "$HTTP_CODE" == "200" ]] || abort "$(m \
     "Snapshot adresi ${HTTP_CODE} döndü." "The snapshot URL returned ${HTTP_CODE}.")"
+  REMOTE_SHA256=$(curl -fsSL --max-time 30 "${SNAPSHOT_URL}.sha256" 2>/dev/null || true)
+  [[ "$REMOTE_SHA256" == "$SNAP_SHA256" ]] || abort "$(m \
+    "Snapshot checksum'u indeks ile CDN arasında uyuşmuyor; indirme başlatılmadı." \
+    "The snapshot checksum differs between the index and CDN; download was not started.")"
   ok "$(m "Snapshot hazır. İndirmeyi node'un kendisi yapacak." \
-         "Snapshot is ready. The node downloads it itself.")"
+             "Snapshot is ready. The node downloads it itself.")"
   warn "$(m "${SNAP_GB} GB indirilecek. Hattınıza göre saatler sürebilir, bu normal." \
           "${SNAP_GB} GB will be downloaded. Depending on your line this takes hours, which is normal.")"
 else
@@ -552,28 +665,62 @@ fi
 ##############################
 section "$(m "SERVİS" "SERVICE")"
 
+if [[ "$EXPOSE_RPC" == "yes" ]]; then
+  ufw status | grep -q '^Status: active' || abort "$(m \
+    "RPC dışarı açılmadan önce UFW aktif olmalı. Önce SSH portunu izinli tutarak UFW'yi yapılandırın." \
+    "UFW must be active before exposing RPC. Configure UFW while keeping your SSH port allowed.")"
+  if [[ -n "$ALLOWED_IP" ]]; then
+    ufw status verbose | grep -q 'Default: deny (incoming)' || abort "$(m \
+      "--allowed-ip güvenli çalışsın diye UFW gelen bağlantı varsayılanı deny olmalı." \
+      "UFW must default to deny incoming connections for --allowed-ip to be safe.")"
+  fi
+fi
+
+# Nitro image v3.11.2 `user` (uid 1000) hesabi ve /home/user altinda
+# calisiyor. Host dizini bu hesaba yazilabilir olmadan kalici veri yazilamaz.
+install -d -m 0755 -o "${CONTAINER_UID}" -g "${CONTAINER_GID}" "${DATA_DIR}"
+
+# L1 saglayici anahtarlari systemd unit ve process argumanlarina yazilmasin.
+# Nitro bu degerleri --conf.env-prefix=NITRO ile environment'tan okur.
+umask 077
+{
+  printf 'NITRO_PARENT__CHAIN_CONNECTION_URL=%s\n' "$L1_RPC"
+  printf 'NITRO_PARENT__CHAIN_BLOB__CLIENT_BEACON__URL=%s\n' "$L1_BEACON"
+  printf 'GOMEMLIMIT=%sGiB\n' "$(( RAM_GB * 3 / 4 ))"
+  printf 'MALLOC_ARENA_MAX=2\n'
+} > "${ENV_FILE}"
+chmod 0600 "${ENV_FILE}"
+
+port_in_use() {
+  ss -ltnH | awk '{print $4}' | grep -Eq "(^|:)${1}$"
+}
 DOCKER_ARGS=(
-  "--chain.info-files=/home/nitro/config/${CHAIN_INFO}"
-  "--parent-chain.connection.url=${L1_RPC}"
-  "--parent-chain.blob-client.beacon-url=${L1_BEACON}"
+  "--conf.env-prefix=NITRO"
+  "--chain.info-files=${CONTAINER_HOME}/config/${CHAIN_INFO}"
   "--node.feed.input.url=${FEED_URL}"
+  "--node.resource-mgmt.mem-free-limit=4GB"
   # Sequencer olmayan bir node bunu istiyor ve olmadan hic acilmiyor:
   # "Fatal configuration error: ForwardingTarget not set and not sequencer".
   # Resmi dokumandaki komutta yok, gercek calistirmada ortaya cikti.
   "--execution.forwarding-target=${FORWARD_TARGET}"
-  "--http.addr=0.0.0.0"
-  "--http.port=8547"
+  "--http.addr=${RPC_BIND_ADDR}"
+  "--http.port=${RPC_PORT}"
   "--http.api=net,web3,eth"
   "--http.vhosts=*"
-  "--http.corsdomain=*"
-  "--ws.addr=0.0.0.0"
-  "--ws.port=8548"
+  "--ws.addr=${RPC_BIND_ADDR}"
+  "--ws.port=${WS_PORT}"
   "--ws.api=net,web3,eth"
 )
-[[ -n "$GENESIS" ]] && DOCKER_ARGS+=("--init.genesis-json-file=/home/nitro/config/${GENESIS}")
+[[ -n "$GENESIS" ]] && DOCKER_ARGS+=("--init.genesis-json-file=${CONTAINER_HOME}/config/${GENESIS}")
 [[ -n "$SNAPSHOT_URL" ]] && DOCKER_ARGS+=("--init.url=${SNAPSHOT_URL}")
+if [[ "$SNAPSHOT_TYPE" == "full-path" || "$SNAPSHOT_TYPE" == "archive-path" ]]; then
+  DOCKER_ARGS+=("--execution.caching.state-scheme=path")
+fi
+if [[ "$SNAPSHOT_TYPE" == "archive-path" ]]; then
+  DOCKER_ARGS+=("--execution.caching.archive=true" "--execution.caching.state-history=0")
+fi
 
-info "$(m "Docker imajı çekiliyor" "Pulling the Docker image"): ${NITRO_IMAGE} (~1.4 GB)"
+info "$(m "Docker imajı çekiliyor" "Pulling the Docker image"): ${NITRO_IMAGE} (~5 GB)"
 if ! docker pull "${NITRO_IMAGE}" >/dev/null 2>/tmp/rh-pull.err; then
   err "$(m "Docker imajı çekilemedi. Docker'ın verdiği hata:" "Could not pull the image. Docker said:")"
   sed 's/^/        /' /tmp/rh-pull.err | head -5
@@ -581,6 +728,25 @@ if ! docker pull "${NITRO_IMAGE}" >/dev/null 2>/tmp/rh-pull.err; then
            "Check your connection and free disk space, then try again.")"
 fi
 ok "$(m "İmaj hazır." "Image is ready.")"
+
+# Guncellemede once tum indirme ve kontrolleri bitir, sonra mevcut node'u
+# graceful shutdown ile kapat. Boylece bir on kontrol hatasi calisan node'u
+# gereksiz yere durdurmaz ve kendi portlarimiz cakisma sanilmaz.
+if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
+  info "$(m "Mevcut servis düzgün biçimde durduruluyor..." \
+           "Gracefully stopping the existing service...")"
+  systemctl stop "${SERVICE}"
+fi
+if [[ "$(docker inspect -f '{{.State.Running}}' "${SERVICE}" 2>/dev/null || true)" == "true" ]]; then
+  docker stop --timeout 1800 "${SERVICE}" >/dev/null
+fi
+
+port_in_use "$RPC_PORT" && abort "$(m \
+  "${RPC_PORT} portu başka bir süreç tarafından kullanılıyor." \
+  "Port ${RPC_PORT} is already used by another process.")"
+port_in_use "$WS_PORT" && abort "$(m \
+  "${WS_PORT} portu başka bir süreç tarafından kullanılıyor." \
+  "Port ${WS_PORT} is already used by another process.")"
 
 # systemd unit dosyasinda % bir belirtec on ekidir ve literal % icin %% yazilir.
 # Snapshot adresi bosluk yuzunden %20 iceriyor, escape edilmeden yazilinca
@@ -593,22 +759,26 @@ After=network-online.target docker.service
 Requires=docker.service
 
 [Service]
-ExecStartPre=-/usr/bin/docker rm -f ${SERVICE}
-ExecStart=/usr/bin/docker run --rm --name ${SERVICE} \\
-  -v ${DATA_DIR}:/home/nitro/.arbitrum \\
-  -v ${CONFIG_DIR}:/home/nitro/config \\
-  -p ${RPC_PORT}:8547 -p ${WS_PORT}:8548 \\
+ExecStartPre=-/usr/bin/docker stop --time 1800 ${SERVICE}
+ExecStartPre=-/usr/bin/docker rm ${SERVICE}
+ExecStart=/usr/bin/docker run --rm --stop-timeout 1800 --name ${SERVICE} --network host \\
+  --env-file ${ENV_FILE} \\
+  -v ${DATA_DIR}:${CONTAINER_HOME}/.arbitrum \\
+  -v ${CONFIG_DIR}:${CONTAINER_HOME}/config:ro \\
   ${NITRO_IMAGE} \\
 $(printf '  %s \\\n' "${DOCKER_ARGS[@]}" | sed 's/%/%%/g; $ s/ \\$//')
-ExecStop=/usr/bin/docker stop -t 120 ${SERVICE}
+ExecStop=/usr/bin/docker stop --time 1800 ${SERVICE}
 Restart=always
 RestartSec=15
-TimeoutStopSec=180
+TimeoutStopSec=1830
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
+systemd-analyze verify "/etc/systemd/system/${SERVICE}.service" >/dev/null 2>&1 \
+  || abort "$(m "Oluşturulan systemd servisi doğrulanamadı." \
+              "The generated systemd service did not pass validation.")"
 systemctl daemon-reload
 systemctl enable "${SERVICE}" >/dev/null 2>&1
 ok "$(m "Servis yazıldı" "Service written"): ${SERVICE}.service"
@@ -637,9 +807,10 @@ if [[ "$EXPOSE_RPC" == "yes" ]]; then
     fi
   fi
 else
-  info "$(m "RPC dışarı açılmadı. Sadece bu sunucudan erişilebilir." \
-          "The RPC was not exposed. It is reachable only from this server.")"
-  info "$(m "Sonradan açmak için" "To open it later"): ufw allow from <ip> to any port ${RPC_PORT} proto tcp"
+  info "$(m "RPC 127.0.0.1 adresine bağlandı; ağdan erişilemez." \
+          "RPC is bound to 127.0.0.1 and is not reachable from the network.")"
+  info "$(m "Uzaktan güvenli kullanım için SSH tüneli açın" "For secure remote use, open an SSH tunnel"):"
+  info "  ssh -L ${RPC_PORT}:127.0.0.1:${RPC_PORT} root@<sunucu-ip>"
 fi
 
 ##############################
@@ -648,7 +819,8 @@ fi
 section "$(m "BAŞLATILIYOR" "STARTING")"
 systemctl restart "${SERVICE}"
 sleep 8
-if systemctl is-active --quiet "${SERVICE}"; then
+if systemctl is-active --quiet "${SERVICE}" && \
+   [[ "$(docker inspect -f '{{.State.Running}}' "${SERVICE}" 2>/dev/null || true)" == "true" ]]; then
   ok "$(m "Servis çalışıyor." "The service is running.")"
 else
   err "$(m "Servis başlamadı. Son satırlar:" "The service did not start. Last lines:")"
@@ -664,8 +836,8 @@ if [[ "$UI_LANG" == "en" ]]; then
 ${BOLD}${GREEN}Setup complete.${RESET}
 
   Network    : ${NETWORK} (chainId ${CHAIN_ID})
-  RPC        : http://127.0.0.1:${RPC_PORT}
-  WebSocket  : ws://127.0.0.1:${WS_PORT}
+  RPC        : http://${RPC_BIND_ADDR}:${RPC_PORT}
+  WebSocket  : ws://${RPC_BIND_ADDR}:${WS_PORT}
   Data       : ${DATA_DIR}
   Config     : ${CONFIG_DIR}
 
@@ -689,16 +861,20 @@ ${BOLD}Checking sync${RESET}
     --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 
 EOF
-  warn "Downloading and unpacking the snapshot takes hours. The block number"
-  warn "standing still for the first few hours is normal, as long as the log moves."
+  if [[ "$USE_SNAPSHOT" == "yes" ]]; then
+    warn "Downloading and unpacking the snapshot takes hours. The block number"
+    warn "standing still for the first few hours is normal, as long as the log moves."
+  else
+    warn "Snapshot is disabled. Syncing from genesis takes substantially longer."
+  fi
 else
   cat <<EOF
 
 ${BOLD}${GREEN}Kurulum tamamlandı.${RESET}
 
   Ağ         : ${NETWORK} (chainId ${CHAIN_ID})
-  RPC        : http://127.0.0.1:${RPC_PORT}
-  WebSocket  : ws://127.0.0.1:${WS_PORT}
+  RPC        : http://${RPC_BIND_ADDR}:${RPC_PORT}
+  WebSocket  : ws://${RPC_BIND_ADDR}:${WS_PORT}
   Veri       : ${DATA_DIR}
   Config     : ${CONFIG_DIR}
 
@@ -722,6 +898,10 @@ ${BOLD}Senkron kontrolü${RESET}
     --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 
 EOF
-  warn "Snapshot indirme ve açma işlemi saatler sürer. İlk saatlerde blok"
-  warn "numarasının ilerlememesi normaldir, log akıyorsa her şey yolundadır."
+  if [[ "$USE_SNAPSHOT" == "yes" ]]; then
+    warn "Snapshot indirme ve açma işlemi saatler sürer. İlk saatlerde blok"
+    warn "numarasının ilerlememesi normaldir, log akıyorsa her şey yolundadır."
+  else
+    warn "Snapshot kapalı. Genesis'ten senkron çok daha uzun sürer."
+  fi
 fi
