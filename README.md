@@ -1,117 +1,124 @@
-# Robinhood Chain RPC Node Kurulum Rehberi
+# Robinhood Chain RPC Node Setup Guide
 
-Bu rehber, Robinhood Chain üzerinde kendi RPC node'unuzu kurmanız için hazırlandı. Config dosyaları
-Robinhood'un CDN'inden, Docker imajı resmi dokümanda sabitlenen sürümden, snapshot bilgisi ise
-Arbitrum'un snapshot indeksinden alınır. Script indirdiği config'in chain ID, parent chain ve Rollup
-adresini; snapshot'ın da durumunu, URL'sini ve SHA-256 checksum'unu başlamadan önce kontrol eder.
+Turkish guide: [TR-Rehber.md](TR-Rehber.md)
 
-Yanındaki `script.sh` bütün adımları tek komutta yapar; seçtiğiniz ağ ve verdiğiniz L1 adresleriyle
-kurulumu sırayla ilerletir.
+This guide explains how to run your own Robinhood Chain RPC node. Configuration files come from
+Robinhood's CDN, the Docker image is pinned to the version in the official documentation, and
+snapshot metadata comes from Arbitrum's snapshot index. Before starting, the script verifies the
+configuration chain ID, parent chain and Rollup address, as well as the snapshot status, URL and
+SHA-256 checksum.
 
----
-
-## Genel Bilgiler
-
-| Özellik            | Açıklama                                                     |
-| ------------------ | ------------------------------------------------------------ |
-| Ağ                 | Robinhood Chain (mainnet)                                     |
-| Chain ID           | 4663                                                          |
-| Tür                | Arbitrum Nitro L2, Ethereum üzerine yazar                     |
-| Resmi doküman      | https://docs.robinhood.com/chain/run-a-full-node/             |
-| Public RPC         | https://rpc.mainnet.chain.robinhood.com                        |
-| Explorer           | https://robinhoodchain.blockscout.com                          |
+The included `script.sh` performs the installation in one guided flow using the selected network
+and the Ethereum L1 endpoints you provide.
 
 ---
 
-## Sistem Gereksinimleri
+## Overview
 
-| Gereksinim         | Detaylar                                                              |
-| ------------------ | --------------------------------------------------------------------- |
-| RAM                | En az 64 GB, önerilen 128 GB                                          |
-| Disk               | Yerel NVMe; güncel zincir boyutunun 2 katı + %20 boş alan             |
-| İşletim Sistemi    | Ubuntu 22.04 veya 24.04                                                |
-| Docker             | Kurulu değilse script kendisi kurar                                   |
-| Ethereum L1        | Bir execution RPC **ve** bir beacon adresi. İkisi de zorunlu          |
-| L1 geçmiş verisi   | Execution `eth_getLogs`, beacon geçmiş blob verisini sunabilmeli      |
-
-31 Ağustos 2026 tarihinde Arbitrum indeksinde tamamlanmış en yeni `pruned` snapshot'lar:
-
-| Ağ       | Tarih      | İndirme boyutu |
-| -------- | ---------- | --------------- |
-| Mainnet  | 2026-08-26 | 466 GB          |
-| Testnet  | 2026-08-28 | 233 GB          |
-
-Bu boyutlar sıkıştırılmış indirme dosyasıdır, diskte oluşacak veritabanının kesin boyutu değildir.
-Resmi doküman birkaç TB kapasiteyi ve `(2 x güncel zincir boyutu) + %20` boş alanı ister. Tam sınırda
-disk almayın. Normal RPC kullanımı için varsayılan `pruned` yeterlidir; geçmiş blok state'i gereken
-işlerde archive node gerekir ve Robinhood dokümanı archive node'un sıfırdan senkronlanacağını söyler.
+| Property | Value |
+| --- | --- |
+| Network | Robinhood Chain Mainnet |
+| Chain ID | 4663 |
+| Type | Arbitrum Nitro L2 settling on Ethereum |
+| Official documentation | https://docs.robinhood.com/chain/run-a-full-node/ |
+| Public RPC | https://rpc.mainnet.chain.robinhood.com |
+| Explorer | https://robinhoodchain.blockscout.com |
 
 ---
 
-## Ethereum L1 Bağlantısı
+## System Requirements
 
-Bu adımı en başa koyuyorum çünkü kurulumun asıl maliyeti burada ve çoğu rehber bunu atlıyor.
+| Requirement | Details |
+| --- | --- |
+| RAM | 64 GB minimum, 128 GB recommended |
+| Storage | Locally attached NVMe; twice the current chain size plus 20% free space |
+| Operating system | Ubuntu 22.04 or 24.04 |
+| Docker | Installed automatically when missing |
+| Ethereum L1 | One execution RPC and one beacon endpoint; both are required |
+| Historical L1 data | Execution must serve historical `eth_getLogs`; beacon must serve historical blobs |
 
-Robinhood Chain verisini Ethereum'a **blob** olarak yazar. Node'un bu veriyi okuyabilmesi için
-iki ayrı adres gerekir:
+Latest completed `pruned` snapshots found in the Arbitrum index on August 31, 2026:
 
-1. **L1 execution RPC**, sıradan bir Ethereum RPC adresi.
-2. **L1 beacon RPC**, blob verisi sadece burada durur, execution tarafında yoktur.
+| Network | Date | Download size |
+| --- | --- | --- |
+| Mainnet | 2026-08-26 | 466 GB |
+| Testnet | 2026-08-28 | 233 GB |
 
-Kendi Ethereum node'unuz varsa ikisi de sizde vardır. Yoksa bir sağlayıcıdan alacaksınız.
-Beacon adresi vermeyen sağlayıcılar var, aldığınızın verdiğinden emin olun.
+These are compressed download sizes, not the final on-disk database size. The official
+documentation requires several terabytes and `(2 x current chain size) + 20%` free space. Do not
+start with a disk that only barely fits the archive. The default `pruned` snapshot is suitable for
+normal RPC use. Workloads that require historical block state need an archive node, which the
+Robinhood documentation says must sync from genesis.
 
-Bir şey daha: execution adresiniz Robinhood Rollup kontratının eski L1 bloklarında `eth_getLogs`
-sorgusuna cevap verebilmeli. Bunun için mutlaka kendi Ethereum archive-state node'unuzu çalıştırmanız
-gerekmez; fakat kullandığınız RPC sağlayıcısı geçmiş log sorgularını kısıtlamamalıdır. Gerçek kurulumda
-şu sağlayıcı hatası görüldü:
+---
 
-```
+## Ethereum L1 Connection
+
+This section comes first because L1 access is a major part of the cost and is often omitted from
+setup guides.
+
+Robinhood Chain posts data to Ethereum as blobs. Your node needs two separate Ethereum endpoints:
+
+1. **L1 execution RPC**, a standard Ethereum JSON-RPC endpoint.
+2. **L1 beacon RPC**, which provides the blob data that is not available through execution RPC.
+
+If you operate your own synced Ethereum execution and beacon nodes, you can use those. Otherwise,
+you need a provider that offers both endpoint types. Some RPC providers do not expose the Beacon
+API, so confirm this before purchasing a plan.
+
+Your execution endpoint must also answer `eth_getLogs` queries for the old Ethereum blocks where
+the Robinhood Rollup contracts were deployed. This does not necessarily require operating your own
+Ethereum archive-state node, but the provider must not block historical log requests. The following
+provider response was reproduced during a real installation:
+
+```text
 ERROR error initializing database
 err="failed getting delayed messages ...: 403 Forbidden:
      Archive requests require a personal token"
 ```
 
-Script başlamadan önce L1 chain ID'yi, Rollup'ın kurulduğu blokta geçmiş log sorgusunu ve beacon
-API'nin temel erişimini kontrol eder. Beacon'ın eski blob verisini gerçekten tuttuğunu yalnızca
-`/eth/v1/node/version` testi kanıtlamaz; sağlayıcı planınızda historical blob desteğini ayrıca doğrulayın.
+Before installation, the script checks the L1 chain ID, a historical log query at the Rollup
+deployment block and basic Beacon API connectivity. A successful `/eth/v1/node/version` response
+does not prove that the provider retains old blobs. Confirm historical blob availability for your
+provider plan separately.
 
-İkisini birden tek yerden almak isterseniz **Alchemy** hem RPC hem beacon adresi veriyor:
+If you prefer one provider for both endpoints, Alchemy offers Ethereum execution and beacon APIs:
 https://www.alchemy.com/rpc/ethereum
 
-Ücretsiz public RPC adreslerinin kota ve geçmiş veri politikası habersiz değişebilir. İlk senkron çok
-fazla L1 isteği üretir; bu nedenle rehber sabit bir ücretsiz endpoint önermiyor. Kendi senkronize
-Ethereum execution + beacon node'unuzu veya historical logs ve historical blobs sunduğunu açıkça
-belirten anahtarlı bir sağlayıcıyı kullanın.
+Free public endpoints can change quotas and historical-data policies without notice. Initial sync
+produces a large number of L1 requests, so this guide does not recommend a fixed free endpoint. Use
+your own fully synced Ethereum execution and beacon nodes, or an authenticated provider that
+explicitly supports historical logs and blobs.
 
-Nitro bağlantı kurarken execution URL'sini INFO loguna yazabilir. URL içinde API anahtarı varsa
-`journalctl` çıktısında da görünür. Anahtarı IP/kota ile kısıtlayın, log ekran görüntüsünü paylaşmayın
-ve yanlışlıkla paylaşılan anahtarı sağlayıcı panelinden hemen yenileyin.
-
----
-
-## Sunucu Seçimi
-
-Sağlayıcı isminden çok makinenin gerçek özelliklerine bakın: 8+ modern CPU, en az 64 GB RAM, yerel
-NVMe ve birkaç TB genişleyebilir disk. Ağ diski, HDD veya kapasitesi kağıt üzerinde yeterli görünen
-ama yüksek IOPS vermeyen paylaşımlı VPS senkronu ciddi biçimde yavaşlatır.
+Nitro may print the execution URL at INFO level. If the URL contains an API key, it can appear in
+`journalctl` as well. Restrict keys by IP and quota, do not publish raw log screenshots, and rotate
+any key that is accidentally exposed.
 
 ---
 
-## 1- Sunucuya Bağlanma
+## Choosing a Server
+
+Check the actual hardware rather than relying on the provider name: a modern 8+ core CPU, at least
+64 GB RAM, locally attached NVMe and several terabytes of expandable storage. Network storage, HDDs
+and low-IOPS shared VPS plans can make synchronization extremely slow even when their advertised
+capacity looks sufficient.
+
+---
+
+## 1. Connect to the Server
 
 ```bash
-ssh root@[Sunucu_IP]
+ssh root@[SERVER_IP]
 ```
 
-- "[Sunucu_IP]" kısmına sunucunuzun IP adresini girin.
+Replace `[SERVER_IP]` with the IP address of your server.
 
-Windows kullanıyorsanız önce WSL kurulumu rehberimi takip edin:
+Windows users can first follow this WSL installation guide:
 https://x.com/UfukDegen/status/1944066889346429338
 
 ---
 
-## 2- Scripti İndirme
+## 2. Download the Script
 
 ```bash
 git clone https://github.com/UfukNode/robinhood-rpc-setup.git
@@ -119,9 +126,11 @@ cd robinhood-rpc-setup
 chmod +x script.sh
 ```
 
+![Clone the repository and make the script executable](assets/en/screenshot-01-repository-setup.png)
+
 ---
 
-## 3- Kurulum
+## 3. Start the Installation
 
 ```bash
 sudo ./script.sh
@@ -129,350 +138,265 @@ sudo ./script.sh
 
 ---
 
-## 4- Dil Seçimi ve Diğer Seçimler:
+## 4. Language and Installation Options
 
-Script başlayınca dil sorar:
+The script first asks you to choose a language. All subsequent prompts and help messages use the
+selected language.
 
-```text
-  Dil seçin / Choose language
+![Select English in the setup script](assets/en/screenshot-02-language-selection.png)
 
-    1) Türkçe
-    2) English
+The script then:
 
-  [1/2]:
-```
+- Checks RAM and disk capacity and warns when they are insufficient.
+- Installs Docker when it is missing.
+- Tests the supplied L1 endpoints and stops if they use the wrong network.
+- Downloads Robinhood configuration files and verifies the chain ID, parent chain and Rollup address.
+- Selects the latest completed snapshot from the Arbitrum index and verifies its checksum.
+- Creates and starts a systemd service named `robinhood-rpc`.
 
-Burada seçeceğiniz dil ile sorular ve yardım ekranı seçtiğiniz dilde çıkar.
+![System, L1, configuration and snapshot preflight checks](assets/en/screenshot-03-preflight-checks.png)
 
-Script sırasıyla şunları yapar:
+Snapshot sizes change over time. The script prints the current size before starting. Nitro performs
+the actual download, which can take several hours.
 
-- RAM ve diski kontrol eder, yetersizse uyarır.
-- Docker yoksa kurar.
-- L1 adreslerinizi test eder, yanlış ağa bağlıysanız durdurur.
-- Config dosyalarını Robinhood CDN'inden indirir; chain ID, parent chain ve Rollup adresini doğrular.
-- Arbitrum indeksinden tamamlanmış en güncel snapshot'ı bulur ve checksum'unu doğrular.
-- `robinhood-rpc` adında bir systemd servisi yazar ve başlatır.
+When setup finishes, the service, firewall and local RPC details are shown together:
 
-Snapshot boyutu zamanla değişir. Script güncel boyutu başlamadan önce ekrana yazar; indirmeyi Nitro
-kendi yapar ve bu işlem saatler sürebilir.
-
-Kurulum bittiğinde ekran şöyle görünür:
-
-```text
-========== SERVİS ==========
-
-[bilgi] Docker imajı çekiliyor: offchainlabs/nitro-node:v3.11.2-3599aca (yaklaşık 5 GB)
-[tamam] İmaj hazır.
-[tamam] Servis yazıldı: robinhood-rpc.service
-
-========== GÜVENLİK DUVARI ==========
-
-[bilgi] RPC 127.0.0.1 adresine bağlandı; ağdan erişilemez.
-[bilgi] Uzaktan güvenli kullanım için SSH tüneli açın:
-[bilgi] ssh -L 8547:127.0.0.1:8547 root@<sunucu-ip>
-
-========== BAŞLATILIYOR ==========
-
-[tamam] Servis çalışıyor.
-
-Kurulum tamamlandı.
-
-  Ağ         : mainnet (chainId 4663)
-  RPC        : http://127.0.0.1:8547
-  WebSocket  : ws://127.0.0.1:8548
-  Veri       : /root/rh/robinhood-nitro-data
-  Config     : /root/rh/config
-
-Sık kullanılan komutlar
-
-  Log izle        : journalctl -u robinhood-rpc -f
-  Durum           : systemctl status robinhood-rpc
-  Durdur          : systemctl stop robinhood-rpc
-  Başlat          : systemctl start robinhood-rpc
-  Kaldır          : sudo ./script.sh --uninstall
-
-Senkron kontrolü
-
-  curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
-    --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}'
-
-  Cevap false olduğunda senkron bitmiştir. O ana kadar blok numarası
-  geriden gelir, bu normaldir.
-
-  curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
-    --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
-
-[uyarı] Snapshot indirme ve açma işlemi saatler sürer. İlk saatlerde blok
-[uyarı] numarasının ilerlememesi normaldir, log akıyorsa her şey yolundadır.
-```
+![Completed Robinhood RPC installation](assets/en/screenshot-04-installation-complete.png)
 
 ---
 
-## 5- Logları İzleme
+## 5. Follow the Logs
 
 ```bash
 journalctl -u robinhood-rpc -f
 ```
 
-Node ayağa kalkarken göreceğiniz satırlar şunlar. `HTTP server started` ve `WebSocket enabled`
-satırlarını gördüyseniz RPC'niz dinlemeye başlamış demektir:
+At startup, the log shows the Nitro version, L1 connection and initial snapshot URL:
 
-```text
-INFO [.....] Running Arbitrum nitro node       revision=v3.11.2-3599aca
-INFO [.....] connected to l1 chain             l1url=https://... l1chainid=1
-INFO [.....] Defaulting to pebble as the backing database
-INFO [.....] HTTP server started               endpoint=127.0.0.1:8547
-INFO [.....] WebSocket enabled                 url=ws://127.0.0.1:8548
-INFO [.....] InboxTracker                      sequencerBatchCount=1 messageCount=1 l1Block=24,994,238
-```
+![Live Robinhood RPC service logs](assets/en/screenshot-05-live-logs.png)
 
-İlk saatlerde blok numarasının ilerlememesi normaldir, snapshot iniyordur. Log akıyorsa her şey
-yolundadır.
+Once `HTTP server started` and `WebSocket enabled` appear, the RPC server is listening.
 
-Snapshot indirilip açılana kadar HTTP/WebSocket sunucusu henüz başlamamış olabilir. Bu aşamada
-8547'nin cevap vermemesi tek başına hata değildir; logda `transferred ... bytes` ilerlemesini izleyin.
-`HTTP server started` satırından sonra RPC sorgularını kullanmaya başlayın.
+During the first hours, the block number may not move because Nitro is downloading and extracting
+the snapshot. This is normal while download progress continues.
+
+The HTTP and WebSocket servers may not start until the snapshot has been downloaded and imported.
+During this phase, no response on port `8547` is not by itself an error. Follow the
+`transferred ... bytes` progress in the logs.
 
 ---
 
-## 6- Senkron Kontrolü
+## 6. Check Synchronization
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}'
 ```
 
-- Cevap `false` olduğunda senkron bitmiştir.
+Synchronization is complete when the result is `false`.
 
-Blok numarasına bakmak için:
+Check the current block number:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
 ```
 
-Node'un doğru ağda olduğunu şöyle teyit edebilirsiniz:
+Confirm that the node uses the correct chain:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
 ```
 
-```text
-{"jsonrpc":"2.0","id":1,"result":"0x1237"}
-```
+Example verification after synchronization completes:
 
-`0x1237` onaltılık tabanda **4663** demektir, yani Robinhood Chain. Farklı bir sayı görüyorsanız
-yanlış config ile açılmışsınızdır.
+![Verify synchronization and the Robinhood Chain ID](assets/en/screenshot-06-rpc-verification.png)
 
-Çıkan blok numarasını explorer'daki son blokla karşılaştırın:
+`0x1237` is hexadecimal for **4663**, the Robinhood Chain ID. A different result means the node is
+using the wrong configuration.
+
+Compare the node's latest block with the explorer:
 https://robinhoodchain.blockscout.com
 
 ---
 
-## 7- RPC'yi Kullanma
+## 7. Use the RPC
 
-Node senkronlandıktan sonra kendi RPC adresiniz hazır demektir:
+After synchronization, the local endpoints are:
 
 ```text
 HTTP       : http://127.0.0.1:8547
 WebSocket  : ws://127.0.0.1:8548
 Chain ID   : 4663
+Gas token  : ETH
 ```
 
-Cüzdanınıza ya da aracınıza ekleyeceğiniz ağ bilgileri de bunlar. Gaz tokeni ETH.
-
-En güvenli uzaktan kullanım yöntemi SSH tünelidir. Kendi bilgisayarınızda çalıştırın:
+The safest way to use them remotely is an SSH tunnel. Run this command on your own computer:
 
 ```bash
-ssh -L 8547:127.0.0.1:8547 -L 8548:127.0.0.1:8548 root@[Sunucu_IP]
+ssh -L 8547:127.0.0.1:8547 -L 8548:127.0.0.1:8548 root@[SERVER_IP]
 ```
 
-Tünel açık kaldığı sürece bilgisayarınızdaki `http://127.0.0.1:8547` sunucudaki node'a gider ve
-internete açık port oluşturmaz.
+While the tunnel is open, `http://127.0.0.1:8547` on your computer connects to the node without
+opening a public RPC port.
 
-Kalıcı olarak başka bir makineye açmanız gerekiyorsa sunucuda UFW aktif ve varsayılan incoming
-politikası `deny` olmalıdır. Sonra kurulumu şu bayraklarla yapın:
+If another server needs permanent access, first enable UFW with a default incoming policy of
+`deny`, then restrict RPC access to that server's IP:
 
 ```bash
-sudo ./script.sh --expose-rpc yes --allowed-ip [SIZIN_IP] \
-  --l1-rpc [L1_RPC_ADRESINIZ] --l1-beacon [BEACON_ADRESINIZ]
+sudo ./script.sh --expose-rpc yes --allowed-ip [YOUR_IP] \
+  --l1-rpc [L1_RPC_URL] --l1-beacon [BEACON_URL]
 ```
 
-- "[SIZIN_IP]" kısmına bağlanacağınız makinenin IP adresini girin.
-- IP vermezseniz port tüm internete açılır ve node'unuzu herkes kullanır. Script bunu ayrıca
-  sorar, farkında olmadan açılmasın diye.
-- Dışarı açık üretim RPC'sinde yalnız UFW ile yetinmeyin; TLS, kimlik doğrulama ve rate limit için
-  Nginx/Caddy gibi bir reverse proxy kullanın.
+- Replace `[YOUR_IP]` with the address allowed to connect.
+- Without an allowed IP, the RPC can be exposed to the entire internet. The script asks for an
+  additional confirmation before doing this.
+- For a public production RPC, add TLS, authentication and rate limiting through Nginx or Caddy.
 
 ---
 
-## Komutlar
+## Commands
 
-| Komut                                   | Açıklama                             |
-| --------------------------------------- | ------------------------------------ |
-| `journalctl -u robinhood-rpc -f`        | Logları canlı izle                   |
-| `systemctl status robinhood-rpc`        | Servis durumu                        |
-| `systemctl stop robinhood-rpc`          | Durdur                               |
-| `systemctl start robinhood-rpc`         | Başlat                               |
-| `systemctl restart robinhood-rpc`       | Yeniden başlat                       |
-| `sudo ./script.sh --uninstall`          | Servisi kaldır (veri korunur)        |
-| `sudo ./script.sh --help`               | Tüm seçenekler                       |
-
----
-
-## Güncelleme
-
-Önce Robinhood'un [Notices & Upgrades](https://docs.robinhood.com/chain/notices-and-upgrades/)
-sayfasını kontrol edin. Script `latest` etiketi kullanmaz; resmi node rehberinin sabitlediği
-`offchainlabs/nitro-node:v3.11.2-3599aca` imajını kullanır. Snapshot metadata'sında veya public
-RPC'de daha yeni/RC sürüm görmek, node'u kendiliğinden o sürüme geçirmeniz gerektiği anlamına gelmez.
-
-Resmi güncelleme duyurulduğunda repoyu güncelleyip aynı kurulum komutunu yeniden çalıştırın. Script
-ön kontrolleri ve image pull işlemini çalışan node'a dokunmadan bitirir, ardından mevcut servise
-30 dakikaya kadar graceful shutdown süresi verir ve aynı veri diziniyle yeniden başlatır. Veri dizini
-silinmez ve tekrar snapshot indirilmez.
+| Command | Description |
+| --- | --- |
+| `journalctl -u robinhood-rpc -f` | Follow live logs |
+| `systemctl status robinhood-rpc` | Show service status |
+| `systemctl stop robinhood-rpc` | Stop the node |
+| `systemctl start robinhood-rpc` | Start the node |
+| `systemctl restart robinhood-rpc` | Restart the node |
+| `sudo ./script.sh --uninstall` | Remove service and configuration; preserve chain data |
+| `sudo ./script.sh --help` | Show every script option |
 
 ---
 
-## Script Seçenekleri
+## Script Options
 
-| Seçenek                    | Ne işe yarar                                              |
-| -------------------------- | --------------------------------------------------------- |
-| `--lang tr\|en`            | Arayüz dili. Verilmezse başta sorulur                      |
-| `--network mainnet\|testnet` | Hangi ağ kurulacak (varsayılan mainnet)                  |
-| `--l1-rpc <url>`           | Ethereum L1 execution adresi, zorunlu                     |
-| `--l1-beacon <url>`        | Ethereum L1 beacon adresi, zorunlu                        |
-| `--dry-run`                | Node/Docker servisini kurmaz; ön kontrolleri çalıştırır   |
-| `--expose-rpc yes`         | RPC'yi dışarı açar                                        |
-| `--allowed-ip <ip>`        | Dışarı açarken sadece bu IP'ye izin verir                 |
-| `--rpc-port <port>`        | HTTP portunu değiştirir (varsayılan 8547)                 |
-| `--ws-port <port>`         | WebSocket portunu değiştirir (varsayılan 8548)            |
-| `--data-dir <yol>`         | Veri ve config kökü (varsayılan `/root/rh`)               |
-| `--snapshot-type <tür>`    | `pruned`, `full-path` veya `archive-path`; çok parçalıysa güvenli biçimde durur |
-| `--forwarding-target <url>` | İşlemlerin iletileceği adres; varsayılan resmi sequencer endpoint'i. Sadece okuma: `null` |
-| `--no-snapshot`            | Snapshot indirmez, sıfırdan senkronlar (çok uzun sürer)   |
-| `--non-interactive`        | Soru sormaz                                               |
-| `--uninstall`              | Servisi ve config'i kaldırır, veriye dokunmaz             |
-
----
-
-## ✅ Tavsiyeler
-
-- Kurulumdan önce mutlaka `--dry-run` çalıştırın. Yüzlerce GB indirdikten sonra hata bulmak can sıkar.
-- Diski `/root` altında değil, ayrı bir NVMe diskte tutmak isterseniz `--data-dir` kullanın.
-- RPC'yi tüm internete açmayın. Açacaksanız `--allowed-ip` ile tek bir adrese kısıtlayın.
-- Snapshot açılırken arşiv ve açılmış veri bir süre birlikte diskte durur. Disk hesabını buna
-  göre yapın, tam sınırda başlamayın.
-- Node durursa systemd kendisi yeniden başlatır. Sürekli yeniden başlıyorsa loga bakın, genelde
-  sebep L1 bağlantısının kopmasıdır.
-- Testnet kuracaksanız L1 adreslerinizin **Sepolia** olması gerekir. Script yanlış ağa bağlıysa
-  size söyler.
-- L1 için ücretsiz public adres kullanmayın. Chain ID sorgusu çalışsa bile geçmiş log/blob erişimi
-  veya uzun senkron kotası yetersiz olabilir.
+| Option | Purpose |
+| --- | --- |
+| `--lang tr\|en` | Interface language; prompts when omitted |
+| `--network mainnet\|testnet` | Network to install; defaults to mainnet |
+| `--l1-rpc <url>` | Required Ethereum execution RPC endpoint |
+| `--l1-beacon <url>` | Required Ethereum beacon endpoint |
+| `--dry-run` | Run checks without installing Docker or the node service |
+| `--expose-rpc yes` | Bind RPC to the network |
+| `--allowed-ip <ip>` | Allow only this IP when RPC is exposed |
+| `--rpc-port <port>` | Change HTTP port; defaults to 8547 |
+| `--ws-port <port>` | Change WebSocket port; defaults to 8548 |
+| `--data-dir <path>` | Data and configuration root; defaults to `/root/rh` |
+| `--snapshot-type <type>` | `pruned`, `full-path` or `archive-path`; safely stops on multipart snapshots |
+| `--forwarding-target <url>` | Transaction forwarding target; defaults to the official sequencer. Use `null` for read-only |
+| `--no-snapshot` | Sync from genesis without a snapshot; takes much longer |
+| `--non-interactive` | Disable prompts |
+| `--uninstall` | Remove the service and configuration without deleting chain data |
 
 ---
 
-## Sorun Giderme
+## Recommendations
 
-**"L1 execution adresi cevap vermedi"**
-Adres yanlış, sağlayıcı kapalı ya da anahtarınız geçersiz. Şununla kendiniz test edin:
+- Run `--dry-run` before downloading hundreds of gigabytes.
+- Use `--data-dir` when chain data should live on a separate NVMe volume.
+- Do not expose RPC to the entire internet. Restrict it with `--allowed-ip` when remote access is
+  required.
+- The compressed archive and extracted database coexist during import. Size the disk for both.
+- Systemd restarts the node after an unexpected exit. Repeated restarts usually indicate an L1 or
+  disk problem; inspect the logs.
+- Testnet requires Sepolia execution and beacon endpoints. The script rejects the wrong L1 network.
+- Do not use free public L1 endpoints. A chain ID check can pass while historical data or sync quota
+  remains insufficient.
+
+---
+
+## Troubleshooting
+
+**"The L1 execution URL did not answer"**
+
+The URL may be incorrect, the provider may be unavailable, or the key may be invalid:
 
 ```bash
-curl -s -X POST [L1_RPC_ADRESINIZ] -H 'content-type: application/json' \
+curl -s -X POST [L1_RPC_URL] -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
 ```
 
-**"Yanlış L1: adres chainId ... döndü"**
-Mainnet kuruyorsanız Ethereum mainnet, testnet kuruyorsanız Sepolia adresi vermelisiniz.
+**"Wrong L1: that URL returned chainId ..."**
 
-**"Beacon adresi cevap vermedi"**
-Sağlayıcınız beacon API vermiyor olabilir. Şununla test edin:
+Mainnet requires Ethereum Mainnet endpoints. Testnet requires Sepolia endpoints.
+
+**"The L1 beacon URL did not answer"**
+
+Your provider may not expose the Beacon API:
 
 ```bash
-curl -s [BEACON_ADRESINIZ]/eth/v1/node/version
+curl -s [BEACON_URL]/eth/v1/node/version
 ```
 
-**"Archive requests require a personal token" ya da benzeri 403**
-Execution sağlayıcınız geçmiş log sorgusuna izin vermiyor. Bu mesaj, mutlaka Ethereum archive-state
-node'u gerektiği anlamına gelmez; sağlayıcınızın historical `eth_getLogs` vermesi gerekir. Mainnet
-Rollup kontratının kurulduğu blok için şöyle test edebilirsiniz:
+**"Archive requests require a personal token" or a similar 403 response**
+
+The execution provider is blocking historical log requests. This does not necessarily mean you
+must run an Ethereum archive-state node; the provider must allow historical `eth_getLogs`. Test the
+Robinhood Mainnet Rollup deployment block with:
 
 ```bash
-curl -s -X POST [L1_RPC_ADRESINIZ] -H 'content-type: application/json' \
+curl -s -X POST [L1_RPC_URL] -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_getLogs","params":[{"address":"0x23A19d23e89166adedbDcB432518AB01e4272D94","fromBlock":"0x17d61be","toBlock":"0x17d61be"}]}'
 ```
 
 **"ForwardingTarget not set and not sequencer"**
-Bu hatayı görmeniz gerekmiyor, script gerekli bayrağı kendisi ekliyor. Resmi dokümandaki komutta
-bu bayrak yok ama node onsuz hiç açılmıyor, gerçek kurulumda ortaya çıktı. Elle kuruyorsanız
-`--execution.forwarding-target=https://sequencer.mainnet.chain.robinhood.com` eklemeyi unutmayın.
+
+The script supplies the required flag automatically. The command in the official guide omits it,
+but the tested image does not start without a forwarding target. For a manual setup, add:
+
+```text
+--execution.forwarding-target=https://sequencer.mainnet.chain.robinhood.com
+```
 
 **"no space left on device"**
-Snapshot dosyası sıkıştırılmış halde yüzlerce GB'dir ve açılırken hem arşiv hem veritabanı aynı anda
-diskte bulunur. `df -h` ile boş alanı kontrol edin. Nitro'nun tavsiye ettiği hesabı kullanın; yalnızca
-snapshot indirme boyutuna bakmayın.
 
-**"stream error: INTERNAL_ERROR; received from peer"**
-Bu hata uzun snapshot indirmesinde CDN'in HTTP/2 stream'ini kapatmasıdır. Nitro'nun kullandığı
-indirici `Range` desteğiyle mevcut dosyanın sonundan devam eder; tek başına bu satır veri kaybı
-anlamına gelmez. Script Nitro istemcisi için `GODEBUG=http2client=0` ayarlayarak snapshot transferini
-HTTP/1.1 üzerinden yapar. Snapshot veritabanının dışındaki kalıcı `snapshot-download` dizinine iner;
-servis yeniden başlarsa kaldığı byte'tan devam eder. Import tamamlanıp RPC cevap verdiğinde yardımcı
-`robinhood-rpc-snapshot-cleanup` servisi indirilen arşivi otomatik siler. İlerlemenin sürdüğünü dosya
-boyutuyla kontrol edebilirsiniz:
+The snapshot is hundreds of gigabytes while compressed, and the archive and extracted database
+coexist during import. Check `df -h` and follow Nitro's disk-capacity formula instead of relying only
+on the compressed download size.
+
+**"stream error: INTERNAL_ERROR" or "attempt 1 failed: unexpected EOF"**
+
+Both messages indicate that the snapshot CDN closed a long transfer. Nitro's downloader supports
+HTTP Range requests and resumes from the existing file. The error alone does not mean data loss if
+the file continues to grow.
+
+The script sets `GODEBUG=http2client=0` so Nitro downloads the snapshot over HTTP/1.1. It also uses a
+persistent `snapshot-download` directory outside the database. A service restart resumes from the
+same byte. After import succeeds and RPC responds, the `robinhood-rpc-snapshot-cleanup` service
+removes the downloaded archive.
+
+Monitor the file size with:
 
 ```bash
 watch -n 10 'du -h /root/rh/robinhood-nitro-data/snapshot-download/'
 ```
 
 **"found unexpected files in database directory, including: tmp"**
-Önceki sürüm snapshot'ı Nitro veritabanının kendi `tmp` dizinine indiriyordu. İndirme sırasında servis
-durdurulursa bu dizin sonraki başlangıcı engelliyordu. Güncel script ayrı ve yeniden kullanılabilir
-`snapshot-download` dizini kullandığı için yeni kurulumlarda bu hata oluşmaz.
 
-**Logda veri yolu `/home/user/.arbitrum/...` görünüyor**
-Bu doğrudur. Robinhood rehberindeki Docker komutu `/home/nitro` gösterse de rehberin sabitlediği
-`v3.11.2-3599aca` imajı gerçek kontrolde `uid=1000(user)` ve `HOME=/home/user` ile çalıştı;
-`/home/nitro` dizini imajda yoktu. Script bu nedenle host veri dizinini `/home/user/.arbitrum`
-yoluna bağlar ve UID 1000'e yazma izni verir. Önceki `/home/nitro` mount'unda veri host diske değil,
-Docker'ın geçici katmanına gidiyor ve konteyner silinince kayboluyordu.
+An older script version downloaded the snapshot into Nitro's database `tmp` directory. If the
+service stopped during download, that directory blocked the next startup. The current script uses a
+separate persistent `snapshot-download` directory, so new installations do not create this failure.
 
-**Servis sürekli yeniden başlıyor**
+**Logs show `/home/user/.arbitrum/...`**
+
+This is expected. Although the Robinhood documentation uses `/home/nitro`, the pinned
+`v3.11.2-3599aca` image was verified to run as `uid=1000(user)` with `HOME=/home/user`; the image does
+not contain `/home/nitro`. The script mounts the host data directory at `/home/user/.arbitrum` and
+grants UID 1000 write access. Using the old mount path placed data in Docker's temporary layer, which
+was lost with the container.
+
+**The service keeps restarting**
+
 ```bash
 journalctl -u robinhood-rpc -n 100 --no-pager
 ```
-Genelde L1 bağlantısı ya da disk dolmasıdır.
+
+The most common causes are an unavailable L1 endpoint or a full disk.
 
 ---
 
-## Test Durumu
+Source: [Official Robinhood Chain documentation](https://docs.robinhood.com/chain/run-a-full-node/)
 
-31 Ağustos 2026 tarihinde Ubuntu 24.04 sunucuda gerçek Docker imajıyla doğrulananlar:
-
-- İmaj `uid=1000(user)` ve `HOME=/home/user` ile çalışıyor; kalıcı veri mount'u bu yola düzeltildi.
-- Mainnet/testnet config dosyaları ve Rollup adresleri Robinhood CDN'iyle karşılaştırıldı.
-- Mainnet/testnet public RPC'leri sırasıyla `0x1237` (4663) ve `0xb626` (46630) döndürüyor.
-- En yeni tamamlanmış pruned snapshot URL'leri `200` ve `.sha256` dosyaları indeksle aynı.
-- `%20` içeren snapshot URL'si üretilen systemd unit içinde `%%20` olarak kaçırılıyor.
-- Varsayılan RPC bind adresi `127.0.0.1`; Docker port NAT'i kullanılmadığı için UFW kuralı atlanmıyor.
-- Veri dizini konteyner silinip yeniden oluşturulduğunda korunuyor.
-- Çalışan servis üzerinde script tekrar çalıştırıldığında graceful stop ve aynı veritabanıyla restart çalışıyor.
-- Yarım snapshot ayrı indirme dizininde restart edildi; dosya küçülmeden aynı byte'tan devam etti.
-- HTTP/1.1 ile 10 dakikada 17,8 GB indirildi; stream hatası ve container restart'ı oluşmadı.
-- Elle durdurulan ana ve snapshot cleanup servisleri `inactive/success` durumunda kaldı.
-- `bash -n`, ShellCheck ve `systemd-analyze verify` kontrolleri geçiyor.
-
-Tam mainnet senkronu henüz doğrulanmadı. Test sunucusu 32 GB RAM, 1 TB HDD ve 335 GB boş alanla
-resmi gereksinimin altında olduğu için 466 GB snapshot'ın tamamını burada indirmek doğru bir test
-olmaz. Rehberde “tam senkronlandı” iddiası bu sonuç alınmadan kullanılmayacak.
-
-Gerçek denemede bulunan kritik hatalar da scriptte kapatıldı: yanlış `/home/nitro` mount'u, dışarı
-açılan Docker portları, kısa shutdown süresi, tamamlanmamış/çok parçalı snapshot seçimi, PathDB
-bayrakları, checksum kontrolü ve L1 geçmiş log sorgusunun yanlış pozitif vermesi.
-
----
-
-Kaynak: [Robinhood Chain resmi dokümanı](https://docs.robinhood.com/chain/run-a-full-node/)
-
-Hazırlayan: [@UfukDegen](https://x.com/UfukDegen)
+Author: [@UfukDegen](https://x.com/UfukDegen)
