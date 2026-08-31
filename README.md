@@ -413,6 +413,24 @@ Snapshot dosyası sıkıştırılmış halde yüzlerce GB'dir ve açılırken he
 diskte bulunur. `df -h` ile boş alanı kontrol edin. Nitro'nun tavsiye ettiği hesabı kullanın; yalnızca
 snapshot indirme boyutuna bakmayın.
 
+**"stream error: INTERNAL_ERROR; received from peer"**
+Bu hata uzun snapshot indirmesinde CDN'in HTTP/2 stream'ini kapatmasıdır. Nitro'nun kullandığı
+indirici `Range` desteğiyle mevcut dosyanın sonundan devam eder; tek başına bu satır veri kaybı
+anlamına gelmez. Script Nitro istemcisi için `GODEBUG=http2client=0` ayarlayarak snapshot transferini
+HTTP/1.1 üzerinden yapar. Snapshot veritabanının dışındaki kalıcı `snapshot-download` dizinine iner;
+servis yeniden başlarsa kaldığı byte'tan devam eder. Import tamamlanıp RPC cevap verdiğinde yardımcı
+`robinhood-rpc-snapshot-cleanup` servisi indirilen arşivi otomatik siler. İlerlemenin sürdüğünü dosya
+boyutuyla kontrol edebilirsiniz:
+
+```bash
+watch -n 10 'du -h /root/rh/robinhood-nitro-data/snapshot-download/'
+```
+
+**"found unexpected files in database directory, including: tmp"**
+Önceki sürüm snapshot'ı Nitro veritabanının kendi `tmp` dizinine indiriyordu. İndirme sırasında servis
+durdurulursa bu dizin sonraki başlangıcı engelliyordu. Güncel script ayrı ve yeniden kullanılabilir
+`snapshot-download` dizini kullandığı için yeni kurulumlarda bu hata oluşmaz.
+
 **Logda veri yolu `/home/user/.arbitrum/...` görünüyor**
 Bu doğrudur. Robinhood rehberindeki Docker komutu `/home/nitro` gösterse de rehberin sabitlediği
 `v3.11.2-3599aca` imajı gerçek kontrolde `uid=1000(user)` ve `HOME=/home/user` ile çalıştı;
@@ -440,6 +458,9 @@ Genelde L1 bağlantısı ya da disk dolmasıdır.
 - Varsayılan RPC bind adresi `127.0.0.1`; Docker port NAT'i kullanılmadığı için UFW kuralı atlanmıyor.
 - Veri dizini konteyner silinip yeniden oluşturulduğunda korunuyor.
 - Çalışan servis üzerinde script tekrar çalıştırıldığında graceful stop ve aynı veritabanıyla restart çalışıyor.
+- Yarım snapshot ayrı indirme dizininde restart edildi; dosya küçülmeden aynı byte'tan devam etti.
+- HTTP/1.1 ile 10 dakikada 17,8 GB indirildi; stream hatası ve container restart'ı oluşmadı.
+- Elle durdurulan ana ve snapshot cleanup servisleri `inactive/success` durumunda kaldı.
 - `bash -n`, ShellCheck ve `systemd-analyze verify` kontrolleri geçiyor.
 
 Tam mainnet senkronu henüz doğrulanmadı. Test sunucusu 32 GB RAM, 1 TB HDD ve 335 GB boş alanla

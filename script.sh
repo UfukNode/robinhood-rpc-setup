@@ -81,6 +81,7 @@ NITRO_IMAGE="offchainlabs/nitro-node:v3.11.2-3599aca"
 CDN="https://cdn.robinhood.com/assets/generated_assets/hoodchain_docsite/chain-node-configs"
 SNAPSHOT_INDEX="https://snapshot-explorer.arbitrum.io/api/snapshots"
 SERVICE="robinhood-rpc"
+SNAPSHOT_CLEANUP_SERVICE="${SERVICE}-snapshot-cleanup"
 CONTAINER_HOME="/home/user"
 CONTAINER_UID="1000"
 CONTAINER_GID="1000"
@@ -281,6 +282,7 @@ esac
 CONFIG_DIR="${DATA_ROOT}/config"
 DATA_DIR="${DATA_ROOT}/robinhood-nitro-data"
 ENV_FILE="${CONFIG_DIR}/rpc.env"
+SNAPSHOT_DOWNLOAD_DIR="${DATA_DIR}/snapshot-download"
 if [[ "$EXPOSE_RPC" == "yes" ]]; then
   RPC_BIND_ADDR="0.0.0.0"
 else
@@ -299,8 +301,10 @@ fi
 ##############################
 if [[ "$UNINSTALL_ONLY" == "1" ]]; then
   section "$(m "KALDIRMA" "UNINSTALL")"
+  systemctl disable --now "${SNAPSHOT_CLEANUP_SERVICE}" 2>/dev/null || true
   systemctl disable --now "${SERVICE}" 2>/dev/null || true
   rm -f "/etc/systemd/system/${SERVICE}.service"
+  rm -f "/etc/systemd/system/${SNAPSHOT_CLEANUP_SERVICE}.service"
   systemctl daemon-reload
   docker rm -f "${SERVICE}" 2>/dev/null || true
   rm -rf "${CONFIG_DIR}"
@@ -679,6 +683,11 @@ fi
 # Nitro image v3.11.2 `user` (uid 1000) hesabi ve /home/user altinda
 # calisiyor. Host dizini bu hesaba yazilabilir olmadan kalici veri yazilamaz.
 install -d -m 0755 -o "${CONTAINER_UID}" -g "${CONTAINER_GID}" "${DATA_DIR}"
+if [[ -n "$SNAPSHOT_URL" ]]; then
+  # Veritabani icindeki varsayilan tmp dizini restart sonrasi Nitro tarafindan
+  # "unexpected files" diye reddediliyor. Ayri dizin yarim indirmeyi korur.
+  install -d -m 0755 -o "${CONTAINER_UID}" -g "${CONTAINER_GID}" "${SNAPSHOT_DOWNLOAD_DIR}"
+fi
 
 # L1 saglayici anahtarlari systemd unit ve process argumanlarina yazilmasin.
 # Nitro bu degerleri --conf.env-prefix=NITRO ile environment'tan okur.
@@ -688,6 +697,9 @@ umask 077
   printf 'NITRO_PARENT__CHAIN_BLOB__CLIENT_BEACON__URL=%s\n' "$L1_BEACON"
   printf 'GOMEMLIMIT=%sGiB\n' "$(( RAM_GB * 3 / 4 ))"
   printf 'MALLOC_ARENA_MAX=2\n'
+  # Snapshot CDN'i uzun HTTP/2 transferlerinde zaman zaman INTERNAL_ERROR ile
+  # stream'i kapatiyor. Go HTTP/1.1'e dustugunde Range ile ayni dosyadan surer.
+  printf 'GODEBUG=http2client=0\n'
 } > "${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
 
@@ -712,7 +724,12 @@ DOCKER_ARGS=(
   "--ws.api=net,web3,eth"
 )
 [[ -n "$GENESIS" ]] && DOCKER_ARGS+=("--init.genesis-json-file=${CONTAINER_HOME}/config/${GENESIS}")
-[[ -n "$SNAPSHOT_URL" ]] && DOCKER_ARGS+=("--init.url=${SNAPSHOT_URL}")
+if [[ -n "$SNAPSHOT_URL" ]]; then
+  DOCKER_ARGS+=(
+    "--init.url=${SNAPSHOT_URL}"
+    "--init.download-path=${CONTAINER_HOME}/.arbitrum/snapshot-download"
+  )
+fi
 if [[ "$SNAPSHOT_TYPE" == "full-path" || "$SNAPSHOT_TYPE" == "archive-path" ]]; then
   DOCKER_ARGS+=("--execution.caching.state-scheme=path")
 fi
@@ -759,7 +776,7 @@ After=network-online.target docker.service
 Requires=docker.service
 
 [Service]
-ExecStartPre=-/usr/bin/docker stop --time 1800 ${SERVICE}
+ExecStartPre=-/usr/bin/docker stop --timeout 1800 ${SERVICE}
 ExecStartPre=-/usr/bin/docker rm ${SERVICE}
 ExecStart=/usr/bin/docker run --rm --stop-timeout 1800 --name ${SERVICE} --network host \\
   --env-file ${ENV_FILE} \\
@@ -767,7 +784,8 @@ ExecStart=/usr/bin/docker run --rm --stop-timeout 1800 --name ${SERVICE} --netwo
   -v ${CONFIG_DIR}:${CONTAINER_HOME}/config:ro \\
   ${NITRO_IMAGE} \\
 $(printf '  %s \\\n' "${DOCKER_ARGS[@]}" | sed 's/%/%%/g; $ s/ \\$//')
-ExecStop=/usr/bin/docker stop --time 1800 ${SERVICE}
+ExecStop=/usr/bin/docker stop --timeout 1800 ${SERVICE}
+SuccessExitStatus=2
 Restart=always
 RestartSec=15
 TimeoutStopSec=1830
@@ -779,8 +797,57 @@ EOF
 systemd-analyze verify "/etc/systemd/system/${SERVICE}.service" >/dev/null 2>&1 \
   || abort "$(m "Oluşturulan systemd servisi doğrulanamadı." \
               "The generated systemd service did not pass validation.")"
+
+if [[ -n "$SNAPSHOT_URL" ]]; then
+  CHAIN_ID_HEX=$(printf '0x%x' "$CHAIN_ID")
+  cat > "${CONFIG_DIR}/cleanup-snapshot.sh" <<EOF
+#!/usr/bin/env bash
+set -u
+
+while systemctl is-active --quiet "${SERVICE}"; do
+  RESPONSE=\$(curl -s --max-time 10 -X POST "http://127.0.0.1:${RPC_PORT}" \\
+    -H 'content-type: application/json' \\
+    --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' 2>/dev/null || true)
+  if printf '%s' "\$RESPONSE" | jq -e --arg expected "${CHAIN_ID_HEX}" \\
+    '.result | ascii_downcase == \$expected' >/dev/null 2>&1; then
+    find "${SNAPSHOT_DOWNLOAD_DIR}" -mindepth 1 -maxdepth 1 -type f -delete
+    rmdir "${SNAPSHOT_DOWNLOAD_DIR}" 2>/dev/null || true
+    exit 0
+  fi
+  sleep 60
+done
+EOF
+  chmod 0700 "${CONFIG_DIR}/cleanup-snapshot.sh"
+
+  cat > "/etc/systemd/system/${SNAPSHOT_CLEANUP_SERVICE}.service" <<EOF
+[Unit]
+Description=Remove Robinhood snapshot after successful import
+Requires=${SERVICE}.service
+After=${SERVICE}.service
+PartOf=${SERVICE}.service
+
+[Service]
+Type=oneshot
+ExecStart=${CONFIG_DIR}/cleanup-snapshot.sh
+SuccessExitStatus=SIGTERM
+
+[Install]
+WantedBy=${SERVICE}.service
+EOF
+  systemd-analyze verify "/etc/systemd/system/${SNAPSHOT_CLEANUP_SERVICE}.service" >/dev/null 2>&1 \
+    || abort "$(m "Snapshot temizleme servisi doğrulanamadı." \
+                "The snapshot cleanup service did not pass validation.")"
+else
+  systemctl disable --now "${SNAPSHOT_CLEANUP_SERVICE}" 2>/dev/null || true
+  rm -f "/etc/systemd/system/${SNAPSHOT_CLEANUP_SERVICE}.service"
+  rm -f "${CONFIG_DIR}/cleanup-snapshot.sh"
+fi
+
 systemctl daemon-reload
 systemctl enable "${SERVICE}" >/dev/null 2>&1
+if [[ -n "$SNAPSHOT_URL" ]]; then
+  systemctl enable "${SNAPSHOT_CLEANUP_SERVICE}" >/dev/null 2>&1
+fi
 ok "$(m "Servis yazıldı" "Service written"): ${SERVICE}.service"
 
 ##############################
