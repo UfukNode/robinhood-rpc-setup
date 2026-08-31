@@ -2,14 +2,15 @@
 
 Turkish guide: [TR-Rehber.md](TR-Rehber.md)
 
-This guide explains how to run your own Robinhood Chain RPC node. Configuration files come from
-Robinhood's CDN, the Docker image is pinned to the version in the official documentation, and
-snapshot metadata comes from Arbitrum's snapshot index. Before starting, the script verifies the
-configuration chain ID, parent chain and Rollup address, as well as the snapshot status, URL and
-SHA-256 checksum.
+This guide helps you install your own Robinhood Chain RPC node on an Ubuntu server with one script.
+You answer a few questions and the script handles the checks, official files, snapshot download and
+system service for you.
 
-The included `script.sh` performs the installation in one guided flow using the selected network
-and the Ethereum L1 endpoints you provide.
+You only need a suitable server and two Ethereum provider URLs. The sections below explain where to
+get them and how to use your RPC after synchronization.
+
+In simple terms, an RPC is the connection your wallet, bot or app uses to talk to Robinhood Chain.
+With this setup, that connection runs on your own server instead of a shared public RPC.
 
 ---
 
@@ -19,7 +20,6 @@ and the Ethereum L1 endpoints you provide.
 | --- | --- |
 | Network | Robinhood Chain Mainnet |
 | Chain ID | 4663 |
-| Type | Arbitrum Nitro L2 settling on Ethereum |
 | Official documentation | https://docs.robinhood.com/chain/run-a-full-node/ |
 | Public RPC | https://rpc.mainnet.chain.robinhood.com |
 | Explorer | https://robinhoodchain.blockscout.com |
@@ -31,77 +31,66 @@ and the Ethereum L1 endpoints you provide.
 | Requirement | Details |
 | --- | --- |
 | RAM | 64 GB minimum, 128 GB recommended |
-| Storage | Locally attached NVMe; twice the current chain size plus 20% free space |
+| Storage | Several TB of local NVMe; 4 TB or more recommended |
 | Operating system | Ubuntu 22.04 or 24.04 |
 | Docker | Installed automatically when missing |
 | Ethereum L1 | One execution RPC and one beacon endpoint; both are required |
-| Historical L1 data | Execution must serve historical `eth_getLogs`; beacon must serve historical blobs |
 
-Latest completed `pruned` snapshots found in the Arbitrum index on August 31, 2026:
-
-| Network | Date | Download size |
-| --- | --- | --- |
-| Mainnet | 2026-08-26 | 466 GB |
-| Testnet | 2026-08-28 | 233 GB |
-
-These are compressed download sizes, not the final on-disk database size. The official
-documentation requires several terabytes and `(2 x current chain size) + 20%` free space. Do not
-start with a disk that only barely fits the archive. The default `pruned` snapshot is suitable for
-normal RPC use. Workloads that require historical block state need an archive node, which the
-Robinhood documentation says must sync from genesis.
+The script automatically finds the latest completed snapshot and shows its size before installation.
+A snapshot is a ready-made copy of the blockchain data. The download is hundreds of gigabytes, but
+the completed database is much larger. Use several terabytes of NVMe storage and keep extra free
+space while the snapshot is being opened.
 
 ---
 
 ## Ethereum L1 Connection
 
-This section comes first because L1 access is a major part of the cost and is often omitted from
-setup guides.
+Before starting, get these two **Ethereum Mainnet** URLs from an RPC provider:
 
-Robinhood Chain posts data to Ethereum as blobs. Your node needs two separate Ethereum endpoints:
+1. **Execution RPC URL**
+2. **Beacon RPC URL**
 
-1. **L1 execution RPC**, a standard Ethereum JSON-RPC endpoint.
-2. **L1 beacon RPC**, which provides the blob data that is not available through execution RPC.
+These are Ethereum URLs, not Robinhood RPC URLs. The setup script asks for both and checks them
+before downloading the snapshot.
 
-If you operate your own synced Ethereum execution and beacon nodes, you can use those. Otherwise,
-you need a provider that offers both endpoint types. Some RPC providers do not expose the Beacon
-API, so confirm this before purchasing a plan.
-
-Your execution endpoint must also answer `eth_getLogs` queries for the old Ethereum blocks where
-the Robinhood Rollup contracts were deployed. This does not necessarily require operating your own
-Ethereum archive-state node, but the provider must not block historical log requests. The following
-provider response was reproduced during a real installation:
+Alchemy is one provider that offers both services. After creating an Ethereum Mainnet app, the URLs
+usually look like this:
 
 ```text
-ERROR error initializing database
-err="failed getting delayed messages ...: 403 Forbidden:
-     Archive requests require a personal token"
+Execution: https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
+Beacon:    https://eth-mainnetbeacon.g.alchemy.com/v2/YOUR_KEY
 ```
 
-Before installation, the script checks the L1 chain ID, a historical log query at the Rollup
-deployment block and basic Beacon API connectivity. A successful `/eth/v1/node/version` response
-does not prove that the provider retains old blobs. Confirm historical blob availability for your
-provider plan separately.
+Replace `YOUR_KEY` with your own key. Initial synchronization makes many requests, so a free plan
+may run out of quota. Make sure your plan supports historical Ethereum data.
 
-If you prefer one provider for both endpoints, Alchemy offers Ethereum execution and beacon APIs:
-https://www.alchemy.com/rpc/ethereum
+Do not share your API key. Nitro may include the execution URL in its logs, so hide the key before
+sharing screenshots and rotate it immediately if it is exposed.
 
-Free public endpoints can change quotas and historical-data policies without notice. Initial sync
-produces a large number of L1 requests, so this guide does not recommend a fixed free endpoint. Use
-your own fully synced Ethereum execution and beacon nodes, or an authenticated provider that
-explicitly supports historical logs and blobs.
+<details>
+<summary>Why are two Ethereum URLs required?</summary>
 
-Nitro may print the execution URL at INFO level. If the URL contains an API key, it can appear in
-`journalctl` as well. Restrict keys by IP and quota, do not publish raw log screenshots, and rotate
-any key that is accidentally exposed.
+Robinhood Chain stores part of its data on Ethereum. The execution URL provides normal Ethereum
+data, while the beacon URL provides blob data. The node needs both to rebuild and verify the chain.
+The script also checks that the execution provider accepts an older `eth_getLogs` request. Basic
+beacon connectivity cannot prove that every historical blob is available, so confirm historical
+blob support with your provider.
+
+</details>
 
 ---
 
 ## Choosing a Server
 
-Check the actual hardware rather than relying on the provider name: a modern 8+ core CPU, at least
-64 GB RAM, locally attached NVMe and several terabytes of expandable storage. Network storage, HDDs
-and low-IOPS shared VPS plans can make synchronization extremely slow even when their advertised
-capacity looks sufficient.
+Do not choose a server only by provider name. Check the actual package:
+
+- Modern CPU with at least 8 cores
+- 64 GB RAM minimum; 128 GB recommended
+- Several terabytes of local NVMe storage; 4 TB or more is a safer starting point
+- Ubuntu 22.04 or 24.04
+
+Do not use an HDD or slow network storage. The snapshot and extracted database temporarily use disk
+space at the same time, so a server that can only fit the download file is not enough.
 
 ---
 
@@ -149,10 +138,10 @@ The script then:
 
 - Checks RAM and disk capacity and warns when they are insufficient.
 - Installs Docker when it is missing.
-- Tests the supplied L1 endpoints and stops if they use the wrong network.
-- Downloads Robinhood configuration files and verifies the chain ID, parent chain and Rollup address.
-- Selects the latest completed snapshot from the Arbitrum index and verifies its checksum.
-- Creates and starts a systemd service named `robinhood-rpc`.
+- Checks the two Ethereum provider URLs.
+- Downloads and verifies the official Robinhood network files.
+- Finds and verifies the latest completed snapshot.
+- Installs and starts the Robinhood RPC service.
 
 ![System, L1, configuration and snapshot preflight checks](assets/en/screenshot-03-preflight-checks.png)
 
@@ -171,38 +160,26 @@ When setup finishes, the service, firewall and local RPC details are shown toget
 journalctl -u robinhood-rpc -f
 ```
 
-At startup, the log shows the Nitro version, L1 connection and initial snapshot URL:
+The log shows whether the node started and whether the snapshot download is progressing:
 
 ![Live Robinhood RPC service logs](assets/en/screenshot-05-live-logs.png)
 
-Once `HTTP server started` and `WebSocket enabled` appear, the RPC server is listening.
-
-During the first hours, the block number may not move because Nitro is downloading and extracting
-the snapshot. This is normal while download progress continues.
-
-The HTTP and WebSocket servers may not start until the snapshot has been downloaded and imported.
-During this phase, no response on port `8547` is not by itself an error. Follow the
-`transferred ... bytes` progress in the logs.
+The first download can take hours. While `transferred ... bytes` keeps increasing, the node is still
+working. Port `8547` may not answer until the snapshot is downloaded and extracted. This is normal.
 
 ---
 
 ## 6. Check Synchronization
+
+Run this command on the RPC server:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}'
 ```
 
-Synchronization is complete when the result is `false`.
-
-Check the current block number:
-
-```bash
-curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
-```
-
-Confirm that the node uses the correct chain:
+If the command does not answer yet, the snapshot is still being prepared. Try again later.
+Synchronization is complete when the result is `false`. Then confirm the network:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
@@ -216,43 +193,80 @@ Example verification after synchronization completes:
 `0x1237` is hexadecimal for **4663**, the Robinhood Chain ID. A different result means the node is
 using the wrong configuration.
 
-Compare the node's latest block with the explorer:
-https://robinhoodchain.blockscout.com
+You can follow the latest blocks at https://robinhoodchain.blockscout.com.
 
 ---
 
 ## 7. Use the RPC
 
-After synchronization, the local endpoints are:
+After synchronization, your RPC is ready. How you connect depends on where your wallet, bot or app
+is running.
+
+### Option A: Your app runs on the RPC server
+
+Use these addresses directly in the app running on that same server:
 
 ```text
 HTTP       : http://127.0.0.1:8547
 WebSocket  : ws://127.0.0.1:8548
-Chain ID   : 4663
-Gas token  : ETH
 ```
 
-The safest way to use them remotely is an SSH tunnel. Run this command on your own computer:
+No SSH tunnel is needed in this case.
+
+### Option B: Connect from your own computer
+
+Run the following command **on your own computer**, not on the RPC server. Replace `[SERVER_IP]`
+with the IP address of the server:
 
 ```bash
-ssh -L 8547:127.0.0.1:8547 -L 8548:127.0.0.1:8548 root@[SERVER_IP]
+ssh -N -L 8547:127.0.0.1:8547 -L 8548:127.0.0.1:8548 root@[SERVER_IP]
 ```
 
-While the tunnel is open, `http://127.0.0.1:8547` on your computer connects to the node without
-opening a public RPC port.
+Enter the server password when asked and keep this terminal window open. This creates a private SSH
+tunnel. Programs on your computer can now use:
 
-If another server needs permanent access, first enable UFW with a default incoming policy of
-`deny`, then restrict RPC access to that server's IP:
+```text
+HTTP       : http://127.0.0.1:8547
+WebSocket  : ws://127.0.0.1:8548
+```
+
+Opening `127.0.0.1` to the whole internet is not required.
+
+### Add the RPC to MetaMask or another wallet
+
+Keep the SSH tunnel open, then add a custom network with these values:
+
+```text
+Network name : Robinhood Chain
+RPC URL      : http://127.0.0.1:8547
+Chain ID     : 4663
+Currency     : ETH
+Explorer     : https://robinhoodchain.blockscout.com
+```
+
+Test the connection from a second terminal on your computer:
+
+```bash
+curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+```
+
+A working Robinhood RPC returns `0x1237`, which is chain ID 4663.
+
+### Option C: Allow another server to connect
+
+This is an advanced option. Use it only when the other server has a fixed IP address. During setup,
+run:
+
 
 ```bash
 sudo ./script.sh --expose-rpc yes --allowed-ip [YOUR_IP] \
   --l1-rpc [L1_RPC_URL] --l1-beacon [BEACON_URL]
 ```
 
-- Replace `[YOUR_IP]` with the address allowed to connect.
-- Without an allowed IP, the RPC can be exposed to the entire internet. The script asks for an
-  additional confirmation before doing this.
-- For a public production RPC, add TLS, authentication and rate limiting through Nginx or Caddy.
+Replace `[YOUR_IP]` with the public IP of the computer or server that will use the RPC. Do not run
+`--expose-rpc yes` without `--allowed-ip`. A public production RPC also needs TLS, authentication and
+rate limiting through a reverse proxy such as Nginx or Caddy.
 
 ---
 
@@ -272,6 +286,9 @@ sudo ./script.sh --expose-rpc yes --allowed-ip [YOUR_IP] \
 
 ## Script Options
 
+<details>
+<summary>Show advanced script options</summary>
+
 | Option | Purpose |
 | --- | --- |
 | `--lang tr\|en` | Interface language; prompts when omitted |
@@ -290,24 +307,24 @@ sudo ./script.sh --expose-rpc yes --allowed-ip [YOUR_IP] \
 | `--non-interactive` | Disable prompts |
 | `--uninstall` | Remove the service and configuration without deleting chain data |
 
+</details>
+
 ---
 
 ## Recommendations
 
-- Run `--dry-run` before downloading hundreds of gigabytes.
-- Use `--data-dir` when chain data should live on a separate NVMe volume.
-- Do not expose RPC to the entire internet. Restrict it with `--allowed-ip` when remote access is
-  required.
-- The compressed archive and extracted database coexist during import. Size the disk for both.
-- Systemd restarts the node after an unexpected exit. Repeated restarts usually indicate an L1 or
-  disk problem; inspect the logs.
-- Testnet requires Sepolia execution and beacon endpoints. The script rejects the wrong L1 network.
-- Do not use free public L1 endpoints. A chain ID check can pass while historical data or sync quota
-  remains insufficient.
+- Run `sudo ./script.sh --dry-run` first. It checks the server and URLs without installing the node.
+- Use NVMe storage with plenty of free space.
+- Do not expose RPC to the whole internet. Use the SSH tunnel shown above.
+- Avoid free Ethereum provider URLs because initial synchronization uses many requests.
+- For Testnet, use Sepolia execution and beacon URLs instead of Ethereum Mainnet URLs.
 
 ---
 
 ## Troubleshooting
+
+<details>
+<summary>Open common errors and solutions</summary>
 
 **"The L1 execution URL did not answer"**
 
@@ -394,6 +411,8 @@ journalctl -u robinhood-rpc -n 100 --no-pager
 ```
 
 The most common causes are an unavailable L1 endpoint or a full disk.
+
+</details>
 
 ---
 

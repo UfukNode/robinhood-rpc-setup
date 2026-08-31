@@ -2,13 +2,17 @@
 
 English guide: [README.md](README.md)
 
-Bu rehber, Robinhood Chain üzerinde kendi RPC node'unuzu kurmanız için hazırlandı. Config dosyaları
-Robinhood'un CDN'inden, Docker imajı resmi dokümanda sabitlenen sürümden, snapshot bilgisi ise
-Arbitrum'un snapshot indeksinden alınır. Script indirdiği config'in chain ID, parent chain ve Rollup
-adresini; snapshot'ın da durumunu, URL'sini ve SHA-256 checksum'unu başlamadan önce kontrol eder.
+Bu rehber, Ubuntu sunucunuza tek script ile kendi Robinhood Chain RPC node'unuzu kurmanızı sağlar.
+Birkaç soruyu cevapladıktan sonra sistem kontrolü, gerekli dosyalar, snapshot indirme ve servis
+kurulumu otomatik yapılır.
 
-Yanındaki `script.sh` bütün adımları tek komutta yapar; seçtiğiniz ağ ve verdiğiniz L1 adresleriyle
-kurulumu sırayla ilerletir.
+Başlamadan önce yalnızca uygun bir sunucuya ve iki Ethereum sağlayıcı adresine ihtiyacınız var.
+Aşağıdaki bölümlerde bu adresleri nereden alacağınız ve senkron bittikten sonra RPC'yi nasıl
+kullanacağınız adım adım anlatılıyor.
+
+Basitçe anlatmak gerekirse RPC, cüzdanınızın, botunuzun veya uygulamanızın Robinhood Chain ile
+konuşmasını sağlayan bağlantıdır. Bu kurulumla ortak bir public RPC yerine kendi sunucunuzdaki
+bağlantıyı kullanırsınız.
 
 ---
 
@@ -18,7 +22,6 @@ kurulumu sırayla ilerletir.
 | ------------------ | ------------------------------------------------------------ |
 | Ağ                 | Robinhood Chain (mainnet)                                     |
 | Chain ID           | 4663                                                          |
-| Tür                | Arbitrum Nitro L2, Ethereum üzerine yazar                     |
 | Resmi doküman      | https://docs.robinhood.com/chain/run-a-full-node/             |
 | Public RPC         | https://rpc.mainnet.chain.robinhood.com                        |
 | Explorer           | https://robinhoodchain.blockscout.com                          |
@@ -30,73 +33,67 @@ kurulumu sırayla ilerletir.
 | Gereksinim         | Detaylar                                                              |
 | ------------------ | --------------------------------------------------------------------- |
 | RAM                | En az 64 GB, önerilen 128 GB                                          |
-| Disk               | Yerel NVMe; güncel zincir boyutunun 2 katı + %20 boş alan             |
+| Disk               | Birkaç TB yerel NVMe; 4 TB veya üzeri önerilir                        |
 | İşletim Sistemi    | Ubuntu 22.04 veya 24.04                                                |
 | Docker             | Kurulu değilse script kendisi kurar                                   |
 | Ethereum L1        | Bir execution RPC **ve** bir beacon adresi. İkisi de zorunlu          |
-| L1 geçmiş verisi   | Execution `eth_getLogs`, beacon geçmiş blob verisini sunabilmeli      |
 
-31 Ağustos 2026 tarihinde Arbitrum indeksinde tamamlanmış en yeni `pruned` snapshot'lar:
-
-| Ağ       | Tarih      | İndirme boyutu |
-| -------- | ---------- | --------------- |
-| Mainnet  | 2026-08-26 | 466 GB          |
-| Testnet  | 2026-08-28 | 233 GB          |
-
-Bu boyutlar sıkıştırılmış indirme dosyasıdır, diskte oluşacak veritabanının kesin boyutu değildir.
-Resmi doküman birkaç TB kapasiteyi ve `(2 x güncel zincir boyutu) + %20` boş alanı ister. Tam sınırda
-disk almayın. Normal RPC kullanımı için varsayılan `pruned` yeterlidir; geçmiş blok state'i gereken
-işlerde archive node gerekir ve Robinhood dokümanı archive node'un sıfırdan senkronlanacağını söyler.
+Script tamamlanmış en güncel snapshot'ı otomatik bulur ve kurulumdan önce boyutunu gösterir.
+Snapshot, blockchain verisinin kuruluma hazır bir kopyasıdır. İndirme yüzlerce GB olabilir, fakat
+tamamlanan veritabanı bundan çok daha büyüktür. Birkaç TB NVMe kullanın ve snapshot açılırken
+fazladan boş alan bırakın.
 
 ---
 
 ## Ethereum L1 Bağlantısı
 
-Bu adımı en başa koyuyorum çünkü kurulumun asıl maliyeti burada ve çoğu rehber bunu atlıyor.
+Kuruluma başlamadan önce bir RPC sağlayıcısından şu iki **Ethereum Mainnet** adresini alın:
 
-Robinhood Chain verisini Ethereum'a **blob** olarak yazar. Node'un bu veriyi okuyabilmesi için
-iki ayrı adres gerekir:
+1. **Execution RPC adresi**
+2. **Beacon RPC adresi**
 
-1. **L1 execution RPC**, sıradan bir Ethereum RPC adresi.
-2. **L1 beacon RPC**, blob verisi sadece burada durur, execution tarafında yoktur.
+Bunlar Robinhood RPC adresi değil, Ethereum adresleridir. Kurulum scripti iki adresi de sizden ister
+ve snapshot indirmeden önce çalışıp çalışmadıklarını kontrol eder.
 
-Kendi Ethereum node'unuz varsa ikisi de sizde vardır. Yoksa bir sağlayıcıdan alacaksınız.
-Beacon adresi vermeyen sağlayıcılar var, aldığınızın verdiğinden emin olun.
+İki adresi de veren sağlayıcılardan biri Alchemy'dir. Ethereum Mainnet uygulaması oluşturduktan sonra
+adresler genellikle şöyle görünür:
 
-Bir şey daha: execution adresiniz Robinhood Rollup kontratının eski L1 bloklarında `eth_getLogs`
-sorgusuna cevap verebilmeli. Bunun için mutlaka kendi Ethereum archive-state node'unuzu çalıştırmanız
-gerekmez; fakat kullandığınız RPC sağlayıcısı geçmiş log sorgularını kısıtlamamalıdır. Gerçek kurulumda
-şu sağlayıcı hatası görüldü:
-
-```
-ERROR error initializing database
-err="failed getting delayed messages ...: 403 Forbidden:
-     Archive requests require a personal token"
+```text
+Execution: https://eth-mainnet.g.alchemy.com/v2/SIZIN_ANAHTARINIZ
+Beacon:    https://eth-mainnetbeacon.g.alchemy.com/v2/SIZIN_ANAHTARINIZ
 ```
 
-Script başlamadan önce L1 chain ID'yi, Rollup'ın kurulduğu blokta geçmiş log sorgusunu ve beacon
-API'nin temel erişimini kontrol eder. Beacon'ın eski blob verisini gerçekten tuttuğunu yalnızca
-`/eth/v1/node/version` testi kanıtlamaz; sağlayıcı planınızda historical blob desteğini ayrıca doğrulayın.
+`SIZIN_ANAHTARINIZ` kısmını kendi anahtarınızla değiştirin. İlk senkron çok fazla istek gönderdiği
+için ücretsiz paketin kotası yetmeyebilir. Paketinizin geçmiş Ethereum verilerini desteklediğinden
+emin olun.
 
-İkisini birden tek yerden almak isterseniz **Alchemy** hem RPC hem beacon adresi veriyor:
-https://www.alchemy.com/rpc/ethereum
+API anahtarınızı paylaşmayın. Nitro bu adresi loga yazabilir; ekran görüntüsü paylaşmadan önce
+anahtarı gizleyin. Yanlışlıkla paylaşırsanız sağlayıcı panelinden hemen yenileyin.
 
-Ücretsiz public RPC adreslerinin kota ve geçmiş veri politikası habersiz değişebilir. İlk senkron çok
-fazla L1 isteği üretir; bu nedenle rehber sabit bir ücretsiz endpoint önermiyor. Kendi senkronize
-Ethereum execution + beacon node'unuzu veya historical logs ve historical blobs sunduğunu açıkça
-belirten anahtarlı bir sağlayıcıyı kullanın.
+<details>
+<summary>Neden iki ayrı Ethereum adresi gerekiyor?</summary>
 
-Nitro bağlantı kurarken execution URL'sini INFO loguna yazabilir. URL içinde API anahtarı varsa
-`journalctl` çıktısında da görünür. Anahtarı IP/kota ile kısıtlayın, log ekran görüntüsünü paylaşmayın
-ve yanlışlıkla paylaşılan anahtarı sağlayıcı panelinden hemen yenileyin.
+Robinhood Chain bazı verilerini Ethereum üzerinde tutar. Execution adresi normal Ethereum verisini,
+beacon adresi ise blob verisini sağlar. Node zinciri kurabilmek ve doğrulayabilmek için ikisine de
+ihtiyaç duyar. Script ayrıca execution sağlayıcısının eski bir `eth_getLogs` isteğine cevap verip
+vermediğini kontrol eder. Beacon bağlantısının çalışması bütün eski blob verilerinin tutulduğunu tek
+başına kanıtlamaz; sağlayıcınızdan historical blob desteğini doğrulayın.
+
+</details>
 
 ---
 
 ## Sunucu Seçimi
 
-Sağlayıcı isminden çok makinenin gerçek özelliklerine bakın: 8+ modern CPU, en az 64 GB RAM, yerel
-NVMe ve birkaç TB genişleyebilir disk. Ağ diski, HDD veya kapasitesi kağıt üzerinde yeterli görünen
-ama yüksek IOPS vermeyen paylaşımlı VPS senkronu ciddi biçimde yavaşlatır.
+Sunucuyu yalnızca sağlayıcı adına bakarak seçmeyin. Pakette şunlar bulunmalı:
+
+- En az 8 çekirdekli modern işlemci
+- En az 64 GB RAM; önerilen 128 GB
+- Birkaç TB yerel NVMe; 4 TB veya üzeri daha güvenli bir başlangıçtır
+- Ubuntu 22.04 veya 24.04
+
+HDD veya yavaş ağ diski kullanmayın. Snapshot açılırken indirme dosyası ve oluşan veritabanı aynı
+anda diskte durur. Yalnızca indirme dosyasının sığdığı bir disk yeterli değildir.
 
 ---
 
@@ -144,10 +141,10 @@ Script sırasıyla şunları yapar:
 
 - RAM ve diski kontrol eder, yetersizse uyarır.
 - Docker yoksa kurar.
-- L1 adreslerinizi test eder, yanlış ağa bağlıysanız durdurur.
-- Config dosyalarını Robinhood CDN'inden indirir; chain ID, parent chain ve Rollup adresini doğrular.
-- Arbitrum indeksinden tamamlanmış en güncel snapshot'ı bulur ve checksum'unu doğrular.
-- `robinhood-rpc` adında bir systemd servisi yazar ve başlatır.
+- Verdiğiniz iki Ethereum adresini kontrol eder.
+- Resmî Robinhood ağ dosyalarını indirir ve doğrular.
+- Tamamlanmış en güncel snapshot'ı bulur ve kontrol eder.
+- Robinhood RPC servisini kurup başlatır.
 
 ![Sistem, L1, config ve snapshot ön kontrolleri](assets/tr/ekran-goruntusu-03-on-kontroller.png)
 
@@ -166,39 +163,27 @@ Kurulum bittiğinde servis, güvenlik duvarı ve yerel RPC bilgileri tek ekranda
 journalctl -u robinhood-rpc -f
 ```
 
-Node ayağa kalkarken Nitro sürümünü, L1 bağlantısını ve snapshot indirme adresini logda görürsünüz:
+Log ekranında node'un başlayıp başlamadığını ve snapshot indirmesinin ilerleyip ilerlemediğini
+görürsünüz:
 
 ![Robinhood RPC canlı servis logları](assets/tr/ekran-goruntusu-05-canli-loglar.png)
 
-`HTTP server started` ve `WebSocket enabled` satırlarını gördüyseniz RPC'niz dinlemeye başlamış
-demektir.
-
-İlk saatlerde blok numarasının ilerlememesi normaldir, snapshot iniyordur. Log akıyorsa her şey
-yolundadır.
-
-Snapshot indirilip açılana kadar HTTP/WebSocket sunucusu henüz başlamamış olabilir. Bu aşamada
-8547'nin cevap vermemesi tek başına hata değildir; logda `transferred ... bytes` ilerlemesini izleyin.
-`HTTP server started` satırından sonra RPC sorgularını kullanmaya başlayın.
+İlk indirme saatler sürebilir. `transferred ... bytes` değeri artıyorsa node çalışmaya devam ediyor
+demektir. Snapshot indirilip açılana kadar `8547` portu cevap vermeyebilir. Bu normaldir.
 
 ---
 
 ## 6- Senkron Kontrolü
+
+Bu komutu RPC sunucusunda çalıştırın:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"eth_syncing","params":[]}'
 ```
 
-- Cevap `false` olduğunda senkron bitmiştir.
-
-Blok numarasına bakmak için:
-
-```bash
-curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}'
-```
-
-Node'un doğru ağda olduğunu şöyle teyit edebilirsiniz:
+Komut henüz cevap vermiyorsa snapshot hazırlanmaya devam ediyordur; daha sonra tekrar deneyin.
+Cevap `false` olduğunda senkron bitmiştir. Ardından doğru ağı kullandığınızı kontrol edin:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
@@ -212,45 +197,80 @@ Senkron tamamlandıktan sonra örnek doğrulama görünümü:
 `0x1237` onaltılık tabanda **4663** demektir, yani Robinhood Chain. Farklı bir sayı görüyorsanız
 yanlış config ile açılmışsınızdır.
 
-Çıkan blok numarasını explorer'daki son blokla karşılaştırın:
-https://robinhoodchain.blockscout.com
+Son blokları https://robinhoodchain.blockscout.com adresinden takip edebilirsiniz.
 
 ---
 
 ## 7- RPC'yi Kullanma
 
-Node senkronlandıktan sonra kendi RPC adresiniz hazır demektir:
+Senkron bittikten sonra RPC'niz hazırdır. Nasıl bağlanacağınız, cüzdanınızın, botunuzun veya
+uygulamanızın nerede çalıştığına göre değişir.
+
+### Seçenek A: Uygulama RPC sunucusunda çalışıyor
+
+Aynı sunucuda çalışan uygulamanıza şu adresleri doğrudan yazın:
 
 ```text
 HTTP       : http://127.0.0.1:8547
 WebSocket  : ws://127.0.0.1:8548
-Chain ID   : 4663
 ```
 
-Cüzdanınıza ya da aracınıza ekleyeceğiniz ağ bilgileri de bunlar. Gaz tokeni ETH.
+Bu durumda SSH tüneline ihtiyacınız yoktur.
 
-En güvenli uzaktan kullanım yöntemi SSH tünelidir. Kendi bilgisayarınızda çalıştırın:
+### Seçenek B: Kendi bilgisayarınızdan bağlanma
+
+Aşağıdaki komutu RPC sunucusunda değil, **kendi bilgisayarınızda** çalıştırın. `[SUNUCU_IP]` kısmını
+sunucunuzun IP adresiyle değiştirin:
 
 ```bash
-ssh -L 8547:127.0.0.1:8547 -L 8548:127.0.0.1:8548 root@[Sunucu_IP]
+ssh -N -L 8547:127.0.0.1:8547 -L 8548:127.0.0.1:8548 root@[SUNUCU_IP]
 ```
 
-Tünel açık kaldığı sürece bilgisayarınızdaki `http://127.0.0.1:8547` sunucudaki node'a gider ve
-internete açık port oluşturmaz.
+Sorulduğunda sunucu şifrenizi girin ve bu terminal penceresini kapatmayın. Bu komut güvenli bir SSH
+tüneli açar. Artık bilgisayarınızdaki uygulamalar şu adresleri kullanabilir:
 
-Kalıcı olarak başka bir makineye açmanız gerekiyorsa sunucuda UFW aktif ve varsayılan incoming
-politikası `deny` olmalıdır. Sonra kurulumu şu bayraklarla yapın:
+```text
+HTTP       : http://127.0.0.1:8547
+WebSocket  : ws://127.0.0.1:8548
+```
+
+Bu yöntemde RPC portunu internete açmanız gerekmez.
+
+### MetaMask veya başka bir cüzdana ekleme
+
+SSH tüneli açıkken cüzdanınıza şu özel ağı ekleyin:
+
+```text
+Ağ adı       : Robinhood Chain
+RPC URL      : http://127.0.0.1:8547
+Chain ID     : 4663
+Para birimi  : ETH
+Explorer     : https://robinhoodchain.blockscout.com
+```
+
+Bağlantıyı kontrol etmek için bilgisayarınızda ikinci bir terminal açıp çalıştırın:
+
+```bash
+curl -s -X POST http://127.0.0.1:8547 -H 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}'
+```
+
+Çalışan Robinhood RPC `0x1237` sonucunu döndürür. Bu değer 4663 chain ID'sidir.
+
+### Seçenek C: Başka bir sunucuya erişim verme
+
+Bu gelişmiş bir seçenektir. Yalnızca bağlanacak diğer sunucunun sabit IP adresi varsa kullanın.
+Kurulum sırasında şu komutu çalıştırın:
+
 
 ```bash
 sudo ./script.sh --expose-rpc yes --allowed-ip [SIZIN_IP] \
   --l1-rpc [L1_RPC_ADRESINIZ] --l1-beacon [BEACON_ADRESINIZ]
 ```
 
-- "[SIZIN_IP]" kısmına bağlanacağınız makinenin IP adresini girin.
-- IP vermezseniz port tüm internete açılır ve node'unuzu herkes kullanır. Script bunu ayrıca
-  sorar, farkında olmadan açılmasın diye.
-- Dışarı açık üretim RPC'sinde yalnız UFW ile yetinmeyin; TLS, kimlik doğrulama ve rate limit için
-  Nginx/Caddy gibi bir reverse proxy kullanın.
+`[SIZIN_IP]` kısmına RPC'yi kullanacak bilgisayarın veya sunucunun public IP adresini yazın.
+`--allowed-ip` olmadan `--expose-rpc yes` kullanmayın. Herkese açık bir üretim RPC'si ayrıca Nginx
+veya Caddy üzerinden TLS, kimlik doğrulama ve hız sınırı gerektirir.
 
 ---
 
@@ -270,6 +290,9 @@ sudo ./script.sh --expose-rpc yes --allowed-ip [SIZIN_IP] \
 
 ## Script Seçenekleri
 
+<details>
+<summary>Gelişmiş script seçeneklerini göster</summary>
+
 | Seçenek                    | Ne işe yarar                                              |
 | -------------------------- | --------------------------------------------------------- |
 | `--lang tr\|en`            | Arayüz dili. Verilmezse başta sorulur                      |
@@ -288,25 +311,24 @@ sudo ./script.sh --expose-rpc yes --allowed-ip [SIZIN_IP] \
 | `--non-interactive`        | Soru sormaz                                               |
 | `--uninstall`              | Servisi ve config'i kaldırır, veriye dokunmaz             |
 
+</details>
+
 ---
 
-## ✅ Tavsiyeler
+## Tavsiyeler
 
-- Kurulumdan önce mutlaka `--dry-run` çalıştırın. Yüzlerce GB indirdikten sonra hata bulmak can sıkar.
-- Diski `/root` altında değil, ayrı bir NVMe diskte tutmak isterseniz `--data-dir` kullanın.
-- RPC'yi tüm internete açmayın. Açacaksanız `--allowed-ip` ile tek bir adrese kısıtlayın.
-- Snapshot açılırken arşiv ve açılmış veri bir süre birlikte diskte durur. Disk hesabını buna
-  göre yapın, tam sınırda başlamayın.
-- Node durursa systemd kendisi yeniden başlatır. Sürekli yeniden başlıyorsa loga bakın, genelde
-  sebep L1 bağlantısının kopmasıdır.
-- Testnet kuracaksanız L1 adreslerinizin **Sepolia** olması gerekir. Script yanlış ağa bağlıysa
-  size söyler.
-- L1 için ücretsiz public adres kullanmayın. Chain ID sorgusu çalışsa bile geçmiş log/blob erişimi
-  veya uzun senkron kotası yetersiz olabilir.
+- Önce `sudo ./script.sh --dry-run` çalıştırın. Bu komut node'u kurmadan sunucuyu ve adresleri kontrol eder.
+- Yeterli boş alanı olan NVMe disk kullanın.
+- RPC'yi tüm internete açmayın. Yukarıda anlatılan SSH tünelini kullanın.
+- İlk senkron çok fazla istek gönderdiği için ücretsiz Ethereum adreslerinden kaçının.
+- Testnet kuracaksanız Ethereum Mainnet yerine Sepolia execution ve beacon adresleri kullanın.
 
 ---
 
 ## Sorun Giderme
+
+<details>
+<summary>Sık karşılaşılan hataları ve çözümlerini aç</summary>
 
 **"L1 execution adresi cevap vermedi"**
 Adres yanlış, sağlayıcı kapalı ya da anahtarınız geçersiz. Şununla kendiniz test edin:
@@ -376,6 +398,8 @@ Docker'ın geçici katmanına gidiyor ve konteyner silinince kayboluyordu.
 journalctl -u robinhood-rpc -n 100 --no-pager
 ```
 Genelde L1 bağlantısı ya da disk dolmasıdır.
+
+</details>
 
 ---
 
